@@ -1,6 +1,6 @@
 # Market Morning — Mac app
 
-Menu bar + floating panel shell for the same UI as the Chrome extension.
+Native menu bar + floating panel. See the [root README](../README.md) for setup, features, and sharing.
 
 ## Build
 
@@ -44,7 +44,3 @@ Or keep `backend/` as a sibling folder next to the `.app`.
 The app uses a normal activation policy so it appears in **⌘Tab** and the Dock while running. Closing the window hides the panel but keeps the app alive (menu bar sun icon remains). Quit from the menu bar right-click menu.
 
 **⌘⇧M** works globally if macOS grants **Accessibility** access (System Settings → Privacy & Security → Accessibility → Market Morning). Without that, the shortcut works when the panel is focused.
-
-## vs Chrome extension
-
-Use **either** the Mac app **or** the Chrome extension — both talk to the same backend on `127.0.0.1:8742`. You do not need both.
