@@ -67,28 +67,6 @@ Uninstall: `./scripts/uninstall-launchagent.sh`
 
 Dev mode (terminal stays open): `./scripts/dev.sh`
 
-## Using the app
-
-| Action | How |
-|--------|-----|
-| Open / hide panel | Click **sun** menu bar icon, or **⌘⇧M** |
-| Always on top | Right-click menu bar icon → **Always on Top** |
-| Reload UI | Right-click → **Reload UI** |
-| Restart API | Right-click → **Restart Backend** |
-| Quit | Right-click → **Quit Market Morning** |
-
-The app appears in **⌘Tab** and the Dock. Closing the window hides the panel; the menu bar icon keeps the app running.
-
-**⌘⇧M** works globally if macOS grants **Accessibility** access (System Settings → Privacy & Security → Accessibility → Market Morning).
-
-## Sharing with someone else
-
-They clone the repo, add their own `ANTHROPIC_API_KEY` in `backend/.env`, and run `./scripts/build-mac-app.sh`. Do **not** commit or share:
-
-- `backend/.env` (API keys)
-- `backend/data/` (personal portfolio & briefs)
-- `backend/.venv/`
-
 ## Project layout
 
 ```
