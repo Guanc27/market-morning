@@ -177,6 +177,15 @@ class Database:
 
         return await self._with_db(_run)
 
+    async def clear_portfolio_analysis(self, analysis_date: str | None = None) -> None:
+        day = analysis_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        async def _run(db: aiosqlite.Connection) -> None:
+            await db.execute("DELETE FROM portfolio_analyses WHERE analysis_date = ?", (day,))
+            await db.commit()
+
+        await self._with_db(_run)
+
     async def backfill_portfolio_analysis_content(
         self, transform: Callable[[str], str]
     ) -> int:

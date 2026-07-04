@@ -105,7 +105,8 @@ def clear_stale_job_if_needed(job: dict[str, Any], max_seconds: float = 600.0) -
                 done=True,
                 progress=100,
                 message="Timed out",
-                error="Job timed out after 10 minutes — try again.",
+                error="Job timed out after 10 minutes — tap Retry or run the action again.",
+                result=None,
             )
             return True
     return False
@@ -114,14 +115,14 @@ def clear_stale_job_if_needed(job: dict[str, Any], max_seconds: float = 600.0) -
 def start_async_job(
     job: dict[str, Any],
     coro_factory: Callable[[], Coroutine[Any, Any, Any]],
-) -> bool:
+) -> tuple[bool, str | None]:
     import time
     with _lock:
         if job.get("running"):
             if _job_is_stale(job):
                 job.update(running=False, done=True, progress=100, message="Timed out", error="Job timed out")
             else:
-                return False
+                return False, "already_running"
         job.update(
             running=True,
             done=False,
@@ -144,4 +145,4 @@ def start_async_job(
             loop.close()
 
     threading.Thread(target=_run, daemon=True).start()
-    return True
+    return True, None

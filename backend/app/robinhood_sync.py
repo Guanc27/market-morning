@@ -161,6 +161,7 @@ async def sync_robinhood(db: Database, force: bool = False) -> dict[str, Any]:
             "reason": "cooldown",
             "last_sync_at": state.get("last_sync_at"),
             "cooldown_seconds": settings.robinhood_sync_cooldown_seconds,
+            "source": state.get("source"),
         }
 
     source = "snapshot"
@@ -210,5 +211,6 @@ async def sync_robinhood(db: Database, force: bool = False) -> dict[str, Any]:
         "holdings": count,
         "account_number": payload.get("account_number"),
         "synced_at": state["last_sync_at"],
-        "error": error,
+        "stale": source == "snapshot" and bool(error),
+        "error": error if source == "snapshot" and error else None,
     }

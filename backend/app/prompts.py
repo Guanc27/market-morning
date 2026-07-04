@@ -69,7 +69,7 @@ For EACH holding, write a subsection:
 
 #### TICKER
 Open with one line: shares, avg cost, price, value, day %, return % (from context). Then one paragraph on fundamentals + technicals (MA20, MA50, RSI, volatility, profitability ratios). Then on its own line:
-**Stop / Limit:** recommended stop or limit price with quant rationale (e.g. "Stop $185 — 20-day MA at $182 declining, RSI 38, break implies ...").
+Stop / Limit: recommended stop or limit price with quant rationale (e.g. "Stop $185 — 20-day MA at $182 declining, RSI 38, break implies ..."). Do not wrap labels in markdown asterisks — plain text only.
 
 ### Portfolio-level metrics
 1–2 paragraphs: concentration, sector weights, correlation clusters, portfolio volatility, Sharpe context if data available, cash deployment.

@@ -12,6 +12,16 @@ _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _MD_EMPH_RE = re.compile(r"\*+([^*]+)\*+")
 
 
+def _normalize_emphasis_markers(text: str) -> str:
+    if not text or "*" not in text:
+        return text
+    t = re.sub(r"\*\*\s+", "**", text)
+    t = re.sub(r"\s+\*\*", "**", t)
+    t = re.sub(r"\*\s+\*(?=\S)", "**", t)
+    t = re.sub(r"(?<=\S)\*\s+\*", "**", t)
+    return t
+
+
 def sanitize_ai_output(text: str) -> str:
     if not text:
         return ""
@@ -23,6 +33,7 @@ def sanitize_ai_output(text: str) -> str:
             cleaned = cleaned[:idx]
     cleaned = _strip_production_meta(cleaned)
     cleaned = _strip_holdings_overview_table(cleaned)
+    cleaned = _normalize_emphasis_markers(cleaned)
     return cleaned.strip()
 
 

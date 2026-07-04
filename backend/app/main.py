@@ -113,8 +113,20 @@ class SyncHoldingsIn(BaseModel):
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "mock_mode": settings.mock_mode,
+        "anthropic_configured": bool(settings.anthropic_api_key) or settings.mock_mode,
+        "fmp_configured": bool(settings.fmp_api_key),
+        "robinhood_configured": bool(
+            settings.robinhood_mcp_access_token or settings.robinhood_sync_proxy_url
+        ),
+    }
+
+
+async def _invalidate_portfolio_analysis() -> None:
+    await db.clear_portfolio_analysis()
 
 
 @app.get("/portfolio")
@@ -162,31 +174,42 @@ async def get_portfolio() -> dict[str, Any]:
 @app.post("/portfolio/sync-robinhood")
 async def sync_robinhood_portfolio(force: bool = False) -> dict[str, Any]:
     result = await sync_robinhood(db, force=force)
+    result["portfolio"] = await get_portfolio()
     if result.get("synced"):
-        result["portfolio"] = await get_portfolio()
-        holdings = await db.get_holdings()
+        await _invalidate_portfolio_analysis()
+        holdings = result["portfolio"].get("holdings") or []
         if holdings:
-            warm_finance_cache([h["ticker"] for h in holdings], blocking=False)  # skip cached fundamentals
+            warm_finance_cache([h["ticker"] for h in holdings], blocking=False)
     return result
 
 
 @app.post("/portfolio/sync")
 async def sync_portfolio(body: SyncHoldingsIn) -> dict[str, Any]:
+    if not body.holdings:
+        raise HTTPException(
+            status_code=400,
+            detail="Refusing empty holdings sync — add at least one position or remove holdings individually.",
+        )
     for h in await db.get_holdings():
         await db.remove_holding(h["ticker"])
     for h in body.holdings:
         await db.upsert_holding(h.ticker, h.shares, h.avg_cost, h.notes or "robinhood")
+    await _invalidate_portfolio_analysis()
     return {"synced": len(body.holdings), "portfolio": await get_portfolio()}
 
 
 @app.post("/portfolio/holding")
 async def upsert_holding(body: HoldingIn) -> dict[str, Any]:
-    return await db.upsert_holding(body.ticker, body.shares, body.avg_cost, body.notes)
+    result = await db.upsert_holding(body.ticker, body.shares, body.avg_cost, body.notes)
+    await _invalidate_portfolio_analysis()
+    return result
 
 
 @app.delete("/portfolio/holding/{ticker}")
 async def delete_holding(ticker: str) -> dict[str, bool]:
     removed = await db.remove_holding(ticker)
+    if removed:
+        await _invalidate_portfolio_analysis()
     return {"removed": removed}
 
 
@@ -203,7 +226,7 @@ async def portfolio_analysis_start(force: bool = False) -> dict[str, Any]:
     if not force:
         cached = await ai.portfolio_analysis(force=False)
         content = (cached.get("content") or "").strip()
-        if content and not content.startswith("**Setup required:**"):
+        if content and not content.startswith("**Setup required:**") and not content.startswith("**API key rejected:**"):
             cached["content"] = sanitize_ai_output(cached["content"])
             PORTFOLIO_JOB.update(
                 running=False,
@@ -214,11 +237,11 @@ async def portfolio_analysis_start(force: bool = False) -> dict[str, Any]:
                 result=cached,
             )
             return {"started": True, "cached": True}
-    started = start_async_job(
+    started, reason = start_async_job(
         PORTFOLIO_JOB,
         lambda: ai.portfolio_analysis_job(force=True),
     )
-    return {"started": started, "cached": False}
+    return {"started": started, "cached": False, "reason": reason}
 
 
 @app.get("/portfolio/analysis/progress")
@@ -257,7 +280,7 @@ async def brief_start(force: bool = False) -> dict[str, Any]:
     if not force:
         row = await db.get_brief_for_today_full()
         content = sanitize_ai_output((row or {}).get("content") or "")
-        if content.strip() and not content.startswith("**Setup required:**"):
+        if content.strip() and not content.startswith("**Setup required:**") and not content.startswith("**API key rejected:**"):
             BRIEF_AI_JOB.update(
                 running=False,
                 done=True,
@@ -267,8 +290,8 @@ async def brief_start(force: bool = False) -> dict[str, Any]:
                 result={"content": content, "cached": True},
             )
             return {"started": True, "cached": True}
-    started = start_async_job(BRIEF_AI_JOB, lambda: ai.morning_brief_job(force=force))
-    return {"started": started, "cached": False}
+    started, reason = start_async_job(BRIEF_AI_JOB, lambda: ai.morning_brief_job(force=force))
+    return {"started": started, "cached": False, "reason": reason}
 
 
 @app.get("/picks/today")
@@ -288,7 +311,7 @@ async def picks_start(force: bool = False) -> dict[str, Any]:
     if not force:
         row = await db.get_picks_by_date(today)
         content = sanitize_ai_output((row or {}).get("content") or "")
-        if content.strip() and not content.startswith("**Setup required:**"):
+        if content.strip() and not content.startswith("**Setup required:**") and not content.startswith("**API key rejected:**"):
             result = {"content": content, "meta": (row or {}).get("meta") or {}}
             PICKS_JOB.update(
                 running=False,
@@ -299,8 +322,8 @@ async def picks_start(force: bool = False) -> dict[str, Any]:
                 result=result,
             )
             return {"started": True, "cached": True}
-    started = start_async_job(PICKS_JOB, lambda: ai.top_picks_job())
-    return {"started": started, "cached": False}
+    started, reason = start_async_job(PICKS_JOB, lambda: ai.top_picks_job())
+    return {"started": started, "cached": False, "reason": reason}
 
 
 @app.get("/picks/progress")
@@ -433,8 +456,8 @@ async def explore_start(body: ExploreIn) -> dict[str, Any]:
     market = body.market.strip()
     if not market:
         raise HTTPException(status_code=400, detail="market is required")
-    started = start_async_job(EXPLORE_JOB, lambda: ai.explore_market_job(market))
-    return {"started": started, "market": market}
+    started, reason = start_async_job(EXPLORE_JOB, lambda: ai.explore_market_job(market))
+    return {"started": started, "market": market, "reason": reason}
 
 
 @app.get("/explore/progress")

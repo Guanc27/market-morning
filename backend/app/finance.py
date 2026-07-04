@@ -289,7 +289,7 @@ def portfolio_metrics(tickers: list[str], *, force_refresh: bool = False) -> dic
     if not tickers:
         return {"ratios": {}, "performance": {}, "risk": {}}
 
-    unique = list(dict.fromkeys(t.upper() for t in tickers[:10]))
+    unique = list(dict.fromkeys(t.upper() for t in tickers[:24]))
     by_ticker: dict[str, dict[str, Any]] = {}
     missing: list[str] = []
 
