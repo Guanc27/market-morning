@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#1a3c34"/>
+  <circle cx="64" cy="64" r="44" stroke="#2d5a4f" stroke-width="3" fill="#0f241e"/>
+  <!-- Friendly bull face badge -->
+  <ellipse cx="64" cy="68" rx="22" ry="20" fill="#f6f4ef"/>
+  <path d="M46 52 C42 44 38 42 34 46 C38 44 42 46 44 50" fill="#e8622a"/>
+  <path d="M82 52 C86 44 90 42 94 46 C90 44 86 46 84 50" fill="#e8622a"/>
+  <circle cx="56" cy="64" r="3" fill="#0a0a0a"/>
+  <circle cx="72" cy="64" r="3" fill="#0a0a0a"/>
+  <ellipse cx="64" cy="76" rx="8" ry="5" fill="#2d5a4f"/>
+  <!-- Small bullish tick -->
+  <path d="M64 24 L68 32 L64 28 L60 32 Z" fill="#e8622a"/>
+</svg>

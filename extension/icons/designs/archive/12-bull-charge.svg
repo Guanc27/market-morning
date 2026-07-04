@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#f6f4ef"/>
+  <!-- Charging bull  geometric side profile -->
+  <path d="M28 88 L38 72 L42 76 L48 64 L52 68 L58 56 L62 60 L68 48 L72 52 L78 44 L82 48 L88 40 L92 44 L98 36 L102 40 L96 52 L90 56 L86 64 L80 68 L76 76 L70 80 L64 88 L58 84 L52 88 L46 84 L40 88 Z" fill="#1a3c34"/>
+  <!-- Horn -->
+  <path d="M98 36 L108 24 L104 34 L98 36Z" fill="#e8622a"/>
+  <!-- Eye -->
+  <circle cx="88" cy="48" r="2.5" fill="#f6f4ef"/>
+  <!-- Uptrend tail line -->
+  <path d="M24 92 L40 76 L56 80 L72 60 L88 64 L104 44" stroke="#e8622a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.5"/>
+</svg>

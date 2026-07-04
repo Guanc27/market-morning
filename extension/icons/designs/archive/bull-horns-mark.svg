@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#0a0a0a"/>
+  <!-- Horns + bullish arc  ultra minimal mark -->
+  <path d="M40 72 C40 48 48 32 64 28 C80 32 88 48 88 72" stroke="#f6f4ef" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M40 72 C32 56 28 44 24 32" stroke="#e8622a" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M88 72 C96 56 100 44 104 32" stroke="#e8622a" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M64 72 L64 44 M64 44 L54 54 M64 44 L74 54" stroke="#2d5a4f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

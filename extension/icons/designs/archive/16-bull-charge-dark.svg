@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#0a0a0a"/>
+  <!-- Wall Street charging bull  minimal line art -->
+  <path d="M32 96 L40 80 L44 84 L50 72 L54 76 L60 64 L64 68 L72 56 L76 60 L84 48 L88 52 L96 40 L100 44 L94 56 L88 60 L84 68 L78 72 L74 80 L68 84 L64 92 L58 88 L52 92 L46 88 L40 92 Z" fill="#f6f4ef"/>
+  <path d="M96 40 L106 28 L102 38 L96 40Z" fill="#e8622a"/>
+  <circle cx="86" cy="52" r="2" fill="#0a0a0a"/>
+  <!-- Ground line + shadow -->
+  <rect x="24" y="94" width="80" height="3" rx="1.5" fill="#1a3c34"/>
+  <!-- Orange bullish streak -->
+  <path d="M104 36 L112 28" stroke="#e8622a" stroke-width="3" stroke-linecap="round"/>
+</svg>

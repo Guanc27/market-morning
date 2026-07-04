@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#1a3c34"/>
+  <!-- Minimal bull head  single-path silhouette -->
+  <path d="M64 28c-14 0-24 10-26 22-4 2-8 8-8 14 0 2 1 4 2 5l-6 14h12l2-8c2 1 4 1 6 1s4 0 6-1l2 8h12l-6-14c1-1 2-3 2-5 0-6-4-12-8-14-2-12-12-22-26-22z" fill="#f6f4ef"/>
+  <!-- Horns -->
+  <path d="M42 38c-6-4-10-2-12 4 4-2 8 0 10 4" fill="#e8622a"/>
+  <path d="M86 38c6-4 10-2 12 4-4-2-8 0-10 4" fill="#e8622a"/>
+  <!-- Eyes + nose -->
+  <circle cx="54" cy="58" r="3" fill="#0a0a0a"/>
+  <circle cx="74" cy="58" r="3" fill="#0a0a0a"/>
+  <ellipse cx="64" cy="72" rx="10" ry="7" fill="#2d5a4f"/>
+  <circle cx="60" cy="70" r="2" fill="#0a0a0a" opacity="0.4"/>
+  <circle cx="68" cy="70" r="2" fill="#0a0a0a" opacity="0.4"/>
+</svg>

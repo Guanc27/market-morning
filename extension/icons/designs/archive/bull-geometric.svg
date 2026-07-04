@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#1a3c34"/>
+  <!-- Geometric bull: 3 shapes -->
+  <ellipse cx="64" cy="72" rx="28" ry="22" fill="#f6f4ef"/>
+  <path d="M38 52 L28 36 L42 48 Z" fill="#e8622a"/>
+  <path d="M90 52 L100 36 L86 48 Z" fill="#e8622a"/>
+  <circle cx="54" cy="68" r="3" fill="#1a3c34"/>
+  <circle cx="74" cy="68" r="3" fill="#1a3c34"/>
+  <!-- Uptrend beneath -->
+  <path d="M28 96 L48 84 L68 88 L88 68 L100 60" stroke="#e8622a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>
+</svg>

@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Market Morning",
+  "description": "AI morning market brief, portfolio analysis, and stock insights",
+  "version": "0.1.0",
+  "permissions": ["storage", "sidePanel"],
+  "host_permissions": ["http://127.0.0.1:8742/*"],
+  "action": {
+    "default_title": "Toggle Market Morning"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

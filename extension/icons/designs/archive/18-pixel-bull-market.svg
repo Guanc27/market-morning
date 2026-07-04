@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" shape-rendering="crispEdges">
+  <rect width="128" height="128" rx="16" fill="#f6f4ef"/>
+  <g transform="translate(20,24) scale(8)">
+    <!-- chart bars -->
+    <rect x="0" y="7" width="11" height="1" fill="#1a3c34"/>
+    <rect x="1" y="6" width="1" height="1" fill="#2d5a4f"/>
+    <rect x="2" y="5" width="1" height="2" fill="#2d5a4f"/>
+    <rect x="3" y="4" width="1" height="3" fill="#1a3c34"/>
+    <rect x="4" y="3" width="1" height="4" fill="#2d5a4f"/>
+    <!-- bull standing on bars -->
+    <rect x="5" y="1" width="1" height="1" fill="#e8622a"/>
+    <rect x="6" y="1" width="1" height="1" fill="#e8622a"/>
+    <rect x="5" y="2" width="2" height="1" fill="#f6f4ef"/>
+    <rect x="4" y="2" width="1" height="1" fill="#e8622a"/>
+    <rect x="7" y="2" width="1" height="1" fill="#e8622a"/>
+    <rect x="5" y="3" width="2" height="1" fill="#1a3c34"/>
+    <rect x="5" y="4" width="1" height="1" fill="#0a0a0a"/>
+    <rect x="6" y="4" width="1" height="1" fill="#0a0a0a"/>
+    <rect x="5" y="5" width="2" height="1" fill="#e8622a"/>
+    <rect x="5" y="6" width="1" height="1" fill="#f6f4ef"/>
+    <rect x="6" y="6" width="1" height="1" fill="#f6f4ef"/>
+    <!-- tail uptrend -->
+    <rect x="8" y="5" width="1" height="1" fill="#e8622a"/>
+    <rect x="9" y="4" width="1" height="1" fill="#e8622a"/>
+    <rect x="10" y="3" width="1" height="1" fill="#e8622a"/>
+  </g>
+</svg>

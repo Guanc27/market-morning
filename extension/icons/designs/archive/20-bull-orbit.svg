@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#1a3c34"/>
+  <!-- Gemini-style: bull + bear contrast but bull wins (bull larger, orange) -->
+  <circle cx="52" cy="68" r="26" fill="#2d5a4f" opacity="0.5"/>
+  <circle cx="76" cy="60" r="30" fill="#f6f4ef"/>
+  <!-- Bull on top circle -->
+  <path d="M76 44c-8 0-14 5-15 12-2 1-3 4-3 6 0 5 4 9 9 10 1 4 4 7 9 7s8-3 9-7c5-1 9-5 9-10 0-2-1-5-3-6-1-7-7-12-15-12z" fill="#1a3c34"/>
+  <path d="M66 50c-2-2-4-1-5 1 1-1 3 0 4 1" fill="#e8622a"/>
+  <path d="M86 50c2-2 4-1 5 1-1-1-3 0-4 1" fill="#e8622a"/>
+  <circle cx="72" cy="58" r="2" fill="#f6f4ef"/>
+  <circle cx="80" cy="58" r="2" fill="#f6f4ef"/>
+  <!-- Bullish arrow -->
+  <path d="M64 28 L64 40 M64 28 L58 34 M64 28 L70 34" stroke="#e8622a" stroke-width="3" stroke-linecap="round"/>
+</svg>

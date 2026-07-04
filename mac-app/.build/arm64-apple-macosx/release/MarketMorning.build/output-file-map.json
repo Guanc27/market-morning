@@ -1,0 +1,31 @@
+{
+  "": {
+    "dependencies": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/MarketMorning.d",
+    "object": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/MarketMorning.o",
+    "swift-dependencies": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/primary.swiftdeps"
+  },
+  "/Users/guanchen/Projects/market-morning/mac-app/Sources/MarketMorning/AppDelegate.swift": {
+    "object": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/AppDelegate.swift.o",
+    "swiftmodule": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/AppDelegate~partial.swiftmodule",
+    "swift-dependencies": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/AppDelegate.swiftdeps",
+    "diagnostics": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/AppDelegate.dia"
+  },
+  "/Users/guanchen/Projects/market-morning/mac-app/Sources/MarketMorning/BackendManager.swift": {
+    "object": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/BackendManager.swift.o",
+    "swiftmodule": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/BackendManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/BackendManager.swiftdeps",
+    "diagnostics": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/BackendManager.dia"
+  },
+  "/Users/guanchen/Projects/market-morning/mac-app/Sources/MarketMorning/PanelWindowController.swift": {
+    "object": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/PanelWindowController.swift.o",
+    "swiftmodule": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/PanelWindowController~partial.swiftmodule",
+    "swift-dependencies": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/PanelWindowController.swiftdeps",
+    "diagnostics": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/PanelWindowController.dia"
+  },
+  "/Users/guanchen/Projects/market-morning/mac-app/Sources/MarketMorning/main.swift": {
+    "object": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/main.swift.o",
+    "swiftmodule": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/main.swiftdeps",
+    "diagnostics": "/Users/guanchen/Projects/market-morning/mac-app/.build/arm64-apple-macosx/release/MarketMorning.build/main.dia"
+  }
+}

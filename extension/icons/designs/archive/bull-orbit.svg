@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#0a0a0a"/>
+  <!-- Overlapping circles  bull energy, Gemini-adjacent -->
+  <circle cx="54" cy="68" r="30" fill="#1a3c34"/>
+  <circle cx="78" cy="60" r="34" fill="#f6f4ef"/>
+  <path d="M78 38c-9 0-16 6-17 14-2 1-3 3-3 5 0 6 4 10 9 11 1 4 4 7 11 7s10-3 11-7c5-1 9-5 9-11 0-2-1-4-3-5-1-8-8-14-17-14z" fill="#1a3c34"/>
+  <path d="M68 46c-2-2-5-2-6 1 1-1 3 0 4 1" fill="#e8622a"/>
+  <path d="M88 46c2-2 5-2 6 1-1-1-3 0-4 1" fill="#e8622a"/>
+  <path d="M78 24 L78 34 M78 24 L72 30 M78 24 L84 30" stroke="#e8622a" stroke-width="2.5" stroke-linecap="round"/>
+</svg>
