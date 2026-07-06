@@ -156,17 +156,32 @@ async def get_portfolio() -> dict[str, Any]:
         })
     enriched.sort(key=lambda x: x.get("value") or 0, reverse=True)
     account = load_account()
+    # Live quotes can be unavailable for illiquid or unrecognized tickers, which
+    # silently zeroes those positions (price defaults to 0) and badly understates
+    # both equity and the return %. When any quote is missing, prefer the broker
+    # snapshot's authoritative equity_value, which reconciles as
+    # equity + cash == total account. When every quote is present the recomputed
+    # total is used unchanged (fresher than the snapshot).
+    snapshot_equity = account.get("equity_value")
+    quotes_complete = bool(holdings) and all(
+        quotes.get(h["ticker"], {}).get("price") for h in holdings
+    )
+    equity_value = total_value
+    if not quotes_complete and snapshot_equity:
+        equity_value = float(snapshot_equity)
+    return_pct = round((equity_value - total_cost) / total_cost * 100, 2) if total_cost else 0
     return {
         "holdings": enriched,
         "account": account,
         "totals": {
-            "value": round(total_value, 2),
+            "value": round(equity_value, 2),
             "cost": round(total_cost, 2),
-            "return_pct": round((total_value - total_cost) / total_cost * 100, 2) if total_cost else 0,
+            "return_pct": return_pct,
             "cash": account.get("cash"),
             "buying_power": account.get("buying_power"),
             "pending_deposits": account.get("pending_deposits"),
             "total_account_value": account.get("total_account_value"),
+            "equity_value": snapshot_equity,
         },
     }
 

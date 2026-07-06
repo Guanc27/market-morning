@@ -1,13 +1,17 @@
 import AppKit
 import WebKit
 
-final class PanelWindowController: NSWindowController, NSWindowDelegate {
+final class PanelWindowController: NSWindowController, NSWindowDelegate, WKScriptMessageHandler {
     private static let frameKey = "mm.panel.frame"
     private static let alwaysOnTopKey = "mm.panel.alwaysOnTop"
+    /// Name of the JS→native bridge: `window.webkit.messageHandlers.ping.postMessage(...)`
+    private static let pingHandlerName = "ping"
 
-    private let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+    private let webView: WKWebView
     private var webViewTopConstraint: NSLayoutConstraint?
     private weak var webContainer: NSView?
+    /// Token returned by `requestUserAttention`, used to cancel the bounce once focused.
+    private var attentionRequestID: Int?
 
     var isVisible: Bool {
         guard let window else { return false }
@@ -19,6 +23,8 @@ final class PanelWindowController: NSWindowController, NSWindowDelegate {
         let alwaysOnTop = defaults.bool(forKey: Self.alwaysOnTopKey)
 
         let rect = Self.initialFrame(defaults: defaults)
+
+        webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
 
         let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         let window = NSWindow(
@@ -40,6 +46,7 @@ final class PanelWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
         setupWebView()
+        setupBridge()
         loadUI()
         ensureOnScreen()
     }
@@ -88,6 +95,44 @@ final class PanelWindowController: NSWindowController, NSWindowDelegate {
         ])
 
         updateWebViewTopInset()
+    }
+
+    /// Registers the JS→native message bridge so the web UI can request a Dock bounce.
+    private func setupBridge() {
+        let controller = webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: Self.pingHandlerName)
+        controller.add(self, name: Self.pingHandlerName)
+    }
+
+    // MARK: - WKScriptMessageHandler
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        guard message.name == Self.pingHandlerName else { return }
+        // Payload: { type: "generation-done", kind: "brief" | "picks" | "explore" | "portfolio" }
+        let type = (message.body as? [String: Any])?["type"] as? String
+        if type == "generation-done" {
+            bounceDock()
+        }
+    }
+
+    /// Bounces the Dock icon to get the user's attention — but only when the app is
+    /// not frontmost, so we never nag while they're already watching the panel.
+    private func bounceDock() {
+        guard !NSApp.isActive else { return }
+        // `.informationalRequest` bounces the Dock icon once (a subtle "ping").
+        // Use `.criticalRequest` instead to bounce continuously until the app is focused.
+        attentionRequestID = NSApp.requestUserAttention(.informationalRequest)
+    }
+
+    /// Clears any pending attention request so the Dock stops bouncing once focused.
+    func cancelAttention() {
+        if let id = attentionRequestID {
+            NSApp.cancelUserAttentionRequest(id)
+            attentionRequestID = nil
+        }
     }
 
     private func titlebarInset(for window: NSWindow) -> CGFloat {

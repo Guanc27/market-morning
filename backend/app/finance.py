@@ -103,39 +103,67 @@ def _toolkit(tickers: list[str]) -> Toolkit | None:
         return None
 
 
+# Intraday quotes change continuously but a short TTL lets the many callers
+# within a single generation (brief, picks screens, portfolio, explore) share
+# one fetch instead of re-hitting yfinance per ticker per call.
+_QUOTE_CACHE: dict[str, tuple[float, dict[str, float | str | None]]] = {}
+_QUOTE_TTL_SECONDS = 60
+_QUOTE_LOCK = threading.Lock()
+
+
+def _fetch_one_quote(ticker: str) -> dict[str, float | str | None]:
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+        hist = t.history(period="5d")
+        prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else None
+        last = float(hist["Close"].iloc[-1]) if len(hist) >= 1 else None
+        change_pct = ((last - prev_close) / prev_close * 100) if last and prev_close else None
+        return {
+            "name": info.get("shortName") or info.get("longName") or ticker,
+            "price": last,
+            "prev_close": prev_close,
+            "change_pct": round(change_pct, 2) if change_pct is not None else None,
+            "sector": info.get("sector"),
+            "industry": info.get("industry"),
+        }
+    except Exception:
+        return {
+            "name": ticker, "price": None, "prev_close": None,
+            "change_pct": None, "sector": None, "industry": None,
+        }
+
+
 def get_quotes(tickers: list[str]) -> dict[str, dict[str, float | str | None]]:
-    """Live quotes — intentionally uncached (intraday prices change continuously)."""
+    """Live quotes — 60s TTL cache + parallel fetch for cache misses."""
     if settings.mock_mode:
         return mock_quotes(tickers)
     if not tickers:
         return {}
+    from concurrent.futures import ThreadPoolExecutor
+
+    now = time.time()
     result: dict[str, dict[str, float | str | None]] = {}
-    for ticker in tickers:
-        try:
-            t = yf.Ticker(ticker)
-            info = t.info or {}
-            hist = t.history(period="5d")
-            prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else None
-            last = float(hist["Close"].iloc[-1]) if len(hist) >= 1 else None
-            change_pct = ((last - prev_close) / prev_close * 100) if last and prev_close else None
-            result[ticker] = {
-                "name": info.get("shortName") or info.get("longName") or ticker,
-                "price": last,
-                "prev_close": prev_close,
-                "change_pct": round(change_pct, 2) if change_pct is not None else None,
-                "sector": info.get("sector"),
-                "industry": info.get("industry"),
-            }
-        except Exception:
-            result[ticker] = {
-                "name": ticker,
-                "price": None,
-                "prev_close": None,
-                "change_pct": None,
-                "sector": None,
-                "industry": None,
-            }
-    return result
+    missing: list[str] = []
+    with _QUOTE_LOCK:
+        for ticker in tickers:
+            cached = _QUOTE_CACHE.get(ticker)
+            if cached and (now - cached[0]) < _QUOTE_TTL_SECONDS:
+                result[ticker] = cached[1]
+            else:
+                missing.append(ticker)
+
+    if missing:
+        with ThreadPoolExecutor(max_workers=min(12, len(missing))) as pool:
+            fetched = dict(zip(missing, pool.map(_fetch_one_quote, missing)))
+        stamp = time.time()
+        with _QUOTE_LOCK:
+            for ticker, quote in fetched.items():
+                _QUOTE_CACHE[ticker] = (stamp, quote)
+                result[ticker] = quote
+    return {t: result.get(t, {"name": t, "price": None, "prev_close": None,
+                              "change_pct": None, "sector": None, "industry": None})
+            for t in tickers}
 
 
 def _latest_metric_row(df: pd.DataFrame | None, ticker: str) -> dict[str, Any]:
@@ -300,11 +328,32 @@ def portfolio_metrics(tickers: list[str], *, force_refresh: bool = False) -> dic
         else:
             missing.append(ticker)
 
-    for ticker in missing:
-        by_ticker[ticker] = _fetch_ticker_fundamentals(ticker)
-        _store_ticker_metrics(ticker, by_ticker[ticker])
+    if missing:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(6, len(missing))) as pool:
+            fetched = dict(zip(missing, pool.map(_fetch_ticker_fundamentals, missing)))
+        for ticker, data in fetched.items():
+            by_ticker[ticker] = data
+            _store_ticker_metrics(ticker, data)
 
     return _assemble_portfolio_metrics(by_ticker)
+
+
+_MCAP_CACHE: dict[str, tuple[float, float | None]] = {}
+_MCAP_TTL_SECONDS = 3600
+
+
+def _market_cap(ticker: str) -> float | None:
+    now = time.time()
+    cached = _MCAP_CACHE.get(ticker)
+    if cached and (now - cached[0]) < _MCAP_TTL_SECONDS:
+        return cached[1]
+    try:
+        cap = (yf.Ticker(ticker).info or {}).get("marketCap")
+    except Exception:
+        cap = None
+    _MCAP_CACHE[ticker] = (now, cap)
+    return cap
 
 
 def screen_candidates(tickers: list[str], max_market_cap: float | None = None) -> list[dict[str, Any]]:
@@ -312,6 +361,14 @@ def screen_candidates(tickers: list[str], max_market_cap: float | None = None) -
     if settings.mock_mode:
         return mock_screen_candidates(tickers)
     quotes = get_quotes(tickers)
+    # Batch market-cap lookups in parallel (cached 1h) only when we actually
+    # need to filter by cap — avoids the old serial per-ticker .info screen.
+    caps: dict[str, float | None] = {}
+    if max_market_cap is not None:
+        from concurrent.futures import ThreadPoolExecutor
+        priced = [t for t in tickers if quotes.get(t, {}).get("price") is not None]
+        with ThreadPoolExecutor(max_workers=min(12, len(priced) or 1)) as pool:
+            caps = dict(zip(priced, pool.map(_market_cap, priced)))
     scored: list[dict[str, Any]] = []
     for ticker in tickers:
         q = quotes.get(ticker, {})
@@ -321,12 +378,8 @@ def screen_candidates(tickers: list[str], max_market_cap: float | None = None) -
             continue
         market_cap = None
         if max_market_cap is not None:
-            try:
-                info = yf.Ticker(ticker).info or {}
-                market_cap = info.get("marketCap")
-                if market_cap is None or market_cap > max_market_cap:
-                    continue
-            except Exception:
+            market_cap = caps.get(ticker)
+            if market_cap is None or market_cap > max_market_cap:
                 continue
         momentum = change if change is not None else 0
         scored.append({

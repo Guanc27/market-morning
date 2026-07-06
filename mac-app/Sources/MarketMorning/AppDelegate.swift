@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
+        panel.cancelAttention()
         if !panel.isVisible {
             panel.show()
         }

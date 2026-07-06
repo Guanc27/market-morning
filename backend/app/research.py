@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 import feedparser
 import httpx
@@ -23,6 +23,159 @@ _TODAY_HOURS = 36
 _RECENT_DAYS = 14
 _MAX_PER_SECTOR = 12
 _FETCH_WORKERS = 10
+
+# --- Google News RSS redirect resolution -------------------------------------
+# Google News RSS article links are opaque `news.google.com/rss/articles/CBMi...`
+# redirect blobs (200+ chars) that both blow the LLM token budget and leak into
+# citations. We resolve them to the real publisher URL at ingestion (before they
+# hit the prompt or the research cache) via Google's batchexecute endpoint, with
+# a per-URL cache and a timeout+fallback to the original link.
+_GNEWS_BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+_GNEWS_BATCH_URL = "https://news.google.com/_/DotsSplashUi/data/batchexecute"
+_GNEWS_RESOLVE_TIMEOUT = 8.0
+_GNEWS_ID_RE = re.compile(r"/(?:rss/)?(?:articles|read)/([^/?#]+)")
+_GNEWS_SIG_RE = re.compile(r'data-n-a-sg="([^"]+)"')
+_GNEWS_TS_RE = re.compile(r'data-n-a-ts="([^"]+)"')
+_GNEWS_URL_CACHE: dict[str, str] = {}
+_GNEWS_CACHE_LOCK = threading.Lock()
+
+
+def _extract_gnews_id(url: str) -> str | None:
+    m = _GNEWS_ID_RE.search(url)
+    return m.group(1) if m else None
+
+
+def _parse_batchexecute_url(text: str) -> str | None:
+    body = text
+    if body.startswith(")]}'"):
+        nl = body.find("\n")
+        body = body[nl:] if nl != -1 else body
+    try:
+        data = json.loads(body)
+        for row in data:
+            if isinstance(row, list) and len(row) > 2 and row[0] == "wrb.fr" and isinstance(row[2], str):
+                inner = json.loads(row[2])
+                if isinstance(inner, list):
+                    for v in inner:
+                        if isinstance(v, str) and v.startswith("http") and "google.com" not in v:
+                            return v
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
+    for cand in re.findall(r'https?://[^\s"\\]+', text):
+        if "google.com" not in cand and "gstatic.com" not in cand:
+            return cand
+    return None
+
+
+def _batchexecute_resolve(article_id: str, client: httpx.Client | None = None) -> str | None:
+    own = client is None
+    if own:
+        client = httpx.Client(
+            timeout=_GNEWS_RESOLVE_TIMEOUT,
+            headers={"User-Agent": _GNEWS_BROWSER_UA},
+            follow_redirects=True,
+        )
+    try:
+        resp = client.get(f"https://news.google.com/rss/articles/{article_id}")
+        if resp.status_code != 200:
+            return None
+        html = resp.text
+        sig = _GNEWS_SIG_RE.search(html)
+        ts = _GNEWS_TS_RE.search(html)
+        if not (sig and ts):
+            return None
+        req = [
+            "garturlreq",
+            [
+                ["X", "X", ["X", "X"], None, None, 1, 1, "US:en", None, 1,
+                 None, None, None, None, None, 0, 1],
+                "X", "X", 1, [1, 1, 1], 1, 1, None, 0, 0, None, 0,
+            ],
+            article_id,
+            int(ts.group(1)),
+            sig.group(1),
+        ]
+        payload = [[["Fbv4je", json.dumps(req)]]]
+        data = "f.req=" + quote(json.dumps(payload))
+        resp2 = client.post(
+            _GNEWS_BATCH_URL,
+            data=data,
+            headers={"content-type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        )
+        if resp2.status_code != 200:
+            return None
+        return _parse_batchexecute_url(resp2.text)
+    except Exception:
+        return None
+    finally:
+        if own:
+            client.close()
+
+
+def _resolve_google_news_url(url: str, client: httpx.Client | None = None) -> str:
+    """Resolve a Google News RSS redirect URL to its canonical publisher URL.
+
+    Cached per-URL; falls back to the original link if resolution fails.
+    """
+    if not url or "news.google.com" not in url:
+        return url
+    with _GNEWS_CACHE_LOCK:
+        cached = _GNEWS_URL_CACHE.get(url)
+    if cached is not None:
+        return cached
+    resolved = url
+    try:
+        article_id = _extract_gnews_id(url)
+        if article_id:
+            got = _batchexecute_resolve(article_id, client)
+            if got:
+                resolved = got
+    except Exception:
+        resolved = url
+    with _GNEWS_CACHE_LOCK:
+        _GNEWS_URL_CACHE[url] = resolved
+    return resolved
+
+
+def _resolve_selected_links(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Resolve Google News redirect links for the final selected articles only.
+
+    Mutates each article in place: canonical link + recomputed access tier.
+    """
+    targets = [
+        a for a in articles
+        if a.get("source_type") == "google_news" and "news.google.com" in (a.get("link") or "")
+    ]
+    if not targets:
+        return articles
+    with httpx.Client(
+        timeout=_GNEWS_RESOLVE_TIMEOUT,
+        headers={"User-Agent": _GNEWS_BROWSER_UA},
+        follow_redirects=True,
+    ) as client:
+        def _resolve_one(article: dict[str, Any]) -> None:
+            resolved = _resolve_google_news_url(article["link"], client)
+            if resolved and resolved != article["link"]:
+                article["link"] = resolved
+                tier, access = _article_access_tier(article.get("publisher", ""), resolved)
+                article["access_tier"] = access
+                article["access_rank"] = tier
+
+        with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
+            list(pool.map(_resolve_one, targets))
+    return articles
+
+
+def _strip_publisher_suffix(title: str, publisher: str) -> str:
+    """Drop the trailing ' - Publisher' that Google News appends to headlines."""
+    title = (title or "").strip()
+    pub = (publisher or "").strip()
+    if pub and title.endswith(f" - {pub}"):
+        return title[: -(len(pub) + 3)].strip()
+    return title
 
 _RESEARCH_PROGRESS: dict[str, Any] = {
     "running": False,
@@ -317,6 +470,7 @@ def _normalize_article(
     sector: str,
     source_type: str,
 ) -> dict[str, Any] | None:
+    title = re.sub(r"<[^>]+>", "", title or "")
     title = re.sub(r"\s+", " ", title).strip()
     link = (link or "").strip()
     if not title or not link or not link.startswith("http"):
@@ -387,11 +541,13 @@ def _google_news_rss(query: str, sector: str) -> list[dict[str, Any]]:
         link = entry.get("link") or ""
         source = entry.get("source", {})
         publisher = source.get("title") if isinstance(source, dict) else "Google News"
+        publisher = str(publisher or "Google News")
+        title = _strip_publisher_suffix(title, publisher)
         pub = _parse_entry_date(entry)
         item = _normalize_article(
             title=title,
             link=link,
-            publisher=str(publisher or "Google News"),
+            publisher=publisher,
             published_at=pub,
             sector=sector,
             source_type="google_news",
@@ -477,6 +633,7 @@ def _build_sector_bundle(sector_key: str, cfg: dict[str, Any]) -> dict[str, Any]
         selected.extend(_pick_ranked(recent, max(need, 6)))
 
     selected = selected[:_MAX_PER_SECTOR]
+    selected = _resolve_selected_links(selected)
     free_count = sum(1 for a in selected if a.get("access_tier") == "free")
     mw_count = sum(1 for a in selected if a.get("access_tier") == "marketwatch")
     return {

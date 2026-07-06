@@ -12,10 +12,16 @@ from typing import Any
 import httpx
 
 _NYSE_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
+_NASDAQ_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 _CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "nyse_universe.json"
+# Full US common-stock/ETF symbol set (Nasdaq + NYSE/Arca/etc.) used for
+# ticker validation — the NYSE-only list above misses Nasdaq names (AAPL, NVDA,
+# CRWD, ...) which made validation corrupt real tickers.
+_ALL_SYMBOLS_CACHE = Path(__file__).resolve().parent.parent / "data" / "us_symbols.json"
 # Exchange listings change slowly (IPOs/delists) — weekly refresh is sufficient.
 _MAX_AGE = timedelta(days=7)
 _LOCK = threading.Lock()
+_ALL_LOCK = threading.Lock()
 
 
 def yfinance_ticker(symbol: str) -> str:
@@ -106,3 +112,58 @@ def get_nyse_tickers(stocks_only: bool = False) -> list[str]:
     if stocks_only:
         symbols = [s for s in symbols if not s.get("is_etf")]
     return [s["ticker"] for s in symbols]
+
+
+def _parse_nasdaq_lines(text: str) -> list[str]:
+    out: list[str] = []
+    for line in text.splitlines():
+        if not line or line.startswith("Symbol|") or line.startswith("File Creation"):
+            continue
+        parts = line.split("|")
+        if len(parts) < 4:
+            continue
+        raw_symbol, _name, _cat, test_issue = parts[0], parts[1], parts[2], parts[3]
+        if test_issue == "Y":
+            continue
+        symbol = yfinance_ticker(raw_symbol)
+        if symbol and re.match(r"^[A-Z][A-Z0-9\-]{0,7}$", symbol):
+            out.append(symbol)
+    return out
+
+
+def _fetch_all_us_symbols() -> list[str]:
+    symbols: set[str] = {s["ticker"] for s in fetch_nyse_universe()}
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+            resp = client.get(_NASDAQ_URL, headers={"User-Agent": "MarketMorning/1.0"})
+            resp.raise_for_status()
+            symbols.update(_parse_nasdaq_lines(resp.text))
+    except Exception:
+        pass
+    return sorted(symbols)
+
+
+def get_all_us_tickers() -> list[str]:
+    """Full US symbol set (Nasdaq + NYSE/other) with a weekly disk cache."""
+    _ALL_SYMBOLS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    if _ALL_SYMBOLS_CACHE.exists():
+        try:
+            cached = json.loads(_ALL_SYMBOLS_CACHE.read_text())
+            updated = cached.get("updated_at")
+            symbols = cached.get("symbols") or []
+            if symbols and updated:
+                dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                if datetime.now(timezone.utc) - dt < _MAX_AGE:
+                    return symbols
+        except (json.JSONDecodeError, ValueError, OSError):
+            pass
+    with _ALL_LOCK:
+        symbols = _fetch_all_us_symbols()
+        if symbols:
+            try:
+                _ALL_SYMBOLS_CACHE.write_text(json.dumps(
+                    {"updated_at": datetime.now(timezone.utc).isoformat(),
+                     "count": len(symbols), "symbols": symbols}, indent=0))
+            except OSError:
+                pass
+        return symbols
