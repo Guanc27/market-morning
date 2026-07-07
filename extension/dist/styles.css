@@ -1301,7 +1301,8 @@ button.btn-loading,
 
 /* Standalone picks refresh pill — mirror .brief-meta so the button is
    horizontally centered between the picks content and the yesterday area.
-   Collapses to zero height while the button is .hidden. */
+   Vertical balance is applied to the button itself (see below) so the row still
+   collapses to zero height — no leftover gap — while the button is .hidden. */
 .picks-refresh-row {
   display: flex;
   flex-direction: column;
@@ -1319,6 +1320,16 @@ button.btn-loading,
   flex: 0 0 auto;
   margin-top: 0;
   min-height: 34px;
+}
+
+/* Vertically center the picks refresh pill between the subtab bar above (which
+   carries a 12px bottom margin) and the picks content box below (no top margin).
+   +4px above the button lifts the effective top gap to 16px so it mirrors the
+   16px below — balanced, and lifted off the content box it was sitting on.
+   The margins live on the button (a flex item, so they never collapse) which
+   keeps the row collapsing cleanly to zero while the button is .hidden. */
+.picks-refresh-row .btn {
+  margin: 4px 0 16px;
 }
 
 /* Single refresh control vocabulary — ONE icon+label pill used for brief,

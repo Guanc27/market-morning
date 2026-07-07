@@ -9,7 +9,7 @@ const OFFLINE_MSG = "Can't reach Market Morning right now";
 const OFFLINE_HINT = "The app may still be starting — give it a moment and try again.";
 const RECONNECT_MSG = "Reconnecting…";
 const RETRY_BUSY_MSG = "Still waking up — trying again…";
-const APP_VERSION = "0.1.54";
+const APP_VERSION = "0.1.55";
 
 function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
