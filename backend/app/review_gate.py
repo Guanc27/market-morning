@@ -412,6 +412,56 @@ def strip_trailing_partial_heading(content: str) -> str:
     return "\n".join(lines).rstrip()
 
 
+# A prose line that truncated mid-clause ends on a bare word character or a
+# comma (e.g. "…with interest coverage" / "…their earnings power, with"). Any
+# other ending — terminal punctuation, a colon lead-in, a closing quote/paren, a
+# percent/number, or markdown emphasis (``*`` ``_`` `` ` ``) — is treated as a
+# complete/intentional line and left untouched (conservative: never trim a line
+# that merely lacks a period but is clearly finished).
+_SENTENCE_END_RE = re.compile(r"^(.*[.!?…])(?=\s|$)", re.S)
+
+
+def strip_trailing_partial_sentence(content: str) -> str:
+    """Trim a dangling partial FINAL sentence left by a mid-generation cutoff.
+
+    A section body whose model call hit its token cap can stop mid-clause,
+    shipping a fragment like ``"…with interest coverage"`` with no terminal
+    punctuation. This trims that trailing fragment: if the last prose line ends
+    mid-clause it is cut back to its last complete sentence, or dropped whole
+    (preserving the rest of a list) when it contains no complete sentence.
+
+    Conservative by design — it only fires on an unambiguous mid-clause ending
+    (last visible char is a letter or comma) and never touches headings, table
+    rows, code fences, or lines that already end on terminal punctuation, a
+    closing quote/paren, a percent/number, or markdown emphasis."""
+    if not content or not content.strip():
+        return content
+    lines = content.rstrip().split("\n")
+    while lines:
+        last = lines[-1]
+        stripped = last.strip()
+        if not stripped:
+            lines.pop()
+            continue
+        # Never touch structural lines (headings, tables, code fences, rules).
+        if re.match(r"^\s*(?:#{1,6}\s|\||```|~~~|-{3,}\s*$|={3,}\s*$)", last):
+            break
+        last_char = stripped[-1]
+        # Mid-clause ONLY when the raw line ends on a bare letter or a comma.
+        if not (last_char.isalpha() or last_char == ","):
+            break
+        # Split off any leading list/quote marker so it survives a partial cut.
+        m = re.match(r"^(\s*(?:[-*+]\s+|>\s+|\d+\.\s+)?)(.*)$", last, re.S)
+        prefix, rest = (m.group(1), m.group(2)) if m else ("", last)
+        sent = _SENTENCE_END_RE.match(rest.rstrip())
+        if sent and sent.group(1).strip():
+            lines[-1] = f"{prefix}{sent.group(1).rstrip()}"
+        else:
+            lines.pop()
+        break
+    return "\n".join(lines).rstrip()
+
+
 # --- Canonical brief title (generation + on-read) ----------------------------
 # Archived briefs drifted between "Market Morning Brief", "Market Brief",
 # "Morning Brief", etc. The app is "Market Morning", so the ONE canonical H1 is

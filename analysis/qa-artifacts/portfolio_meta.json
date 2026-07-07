@@ -1,0 +1,82 @@
+{
+  "actions": [
+    {
+      "severity": 1,
+      "label": "Address NVTS breakdown",
+      "factor": "semis, beta",
+      "alpha": false,
+      "detail": "NVTS is the flagged worst-drawdown position at -11.3% with RSI14 23.6, price below both MA20 ($20.55) and MA50 ($21.28). Operating margin -195%, net margin -255% \u2014 this is a cash-burning semis name, not a mispriced quality asset. No IR/residual-alpha data resolved, so there is no alpha claim to make here; oversold reading alone is not a buy signal without a fundamental catalyst. Position is small (2.7% weight, $304.60), so the dollar risk is contained, but continuing to hold through further breakdown adds tail risk for no evidenced edge. Net edge of holding here is negative \u2014 friction-adjusted, trimming to a token position or exiting on any close below $13.50 clears risk cheaply given the small size."
+    },
+    {
+      "severity": 1,
+      "label": "Trim MU into strength",
+      "factor": "memory/commodity cycle, beta",
+      "alpha": false,
+      "detail": "MU is up 323.74%, the largest gain and largest position in the book ($2,227.19, tax_sensitive_winner=true). Memory is a cyclical, mean-reverting commodity business \u2014 P/FCF has stretched to 192x versus P/CF of 18.3x, showing capex is eating free cash flow even as reported margins look fine (27% operating margin). No IR data resolved, so this is purely a valuation/cycle-position call, not alpha. A full sale realizes a large long-term gain and a real tax bill; the better structure is a partial trim (20-30% of the position) to lock in cycle gains while keeping upside exposure, or a collar (sell calls near $1,050-1,100, buy protective puts near $900) to defer the tax event while capping downside. Net edge: trimming into a 192x P/FCF print clearly outweighs the after-tax drag on a partial sale; a full outright sale's edge is thinner once taxes are modeled \u2014 collar is the preferred structure here."
+    },
+    {
+      "severity": 2,
+      "label": "Trim/hedge VRT \u2014 re-bucket as AI-capex beta, not a diversifier",
+      "factor": "ai_infra (data-center power), beta",
+      "alpha": false,
+      "detail": "VRT is up 79.85% and sits below MA50 ($324.82) while the broader semis complex (NVDA, MRVL) is already showing technical weakness. Vertiv's revenue is directly tied to AI data-center buildout capex \u2014 it moves with the same factor as AMD/NVDA/TSM/MU, so it does not diversify the book despite sitting in a different sector template label. Fundamentals are fine (18.5% operating margin) but the 47.5x P/E leaves no valuation cushion if the capex cycle cools. No IR/alpha data resolved \u2014 this is a beta-concentration call. Net edge: trimming 15-20% of the position to reduce correlated AI-capex exposure is worth the modest tax drag on the gain, given the book is already carrying MU, TSM, AMD, NVDA, MRVL in the same factor."
+    },
+    {
+      "severity": 3,
+      "label": "Redeploy cash toward SOFI/financials to widen the factor base",
+      "factor": "financials, beta (rate/credit cycle)",
+      "alpha": false,
+      "detail": "With $1,277.70 cash plus a $2,000 pending deposit (about 22% of equity in dry powder), the highest-value use is closing the factor gap rather than adding a fifth semis name. SOFI is the only clean rate/credit exposure in the book, up 10.38% and trading above both MA20 ($17.33) and MA50 ($16.87) with RSI14 69.6 reflecting positioning strength, not exhaustion, under the financials template. No IR data resolved so this is not an alpha claim \u2014 it's a diversification-by-factor decision. Net edge: adding to a genuinely uncorrelated sleeve when effective independent bets are running near 3-4 despite 12 nominal positions has a clear risk-reduction edge that outweighs the opportunity cost of not adding to the already-crowded semis trade."
+    }
+  ],
+  "positions": [
+    {
+      "ticker": "AIP",
+      "stop_limit": "Stop $30.50 \u2014 no ATR resolved this sync; use MA50 $35.87 as bull trigger, hard stop $30.50 given negative margins; time-stop 10 sessions"
+    },
+    {
+      "ticker": "AMD",
+      "stop_limit": "Stop $465 (MA50) \u2014 ATR not resolved this sync; beta/factor call on semis cycle; time-stop 15 sessions"
+    },
+    {
+      "ticker": "GOOG",
+      "stop_limit": "Stop $345 \u2014 quality-grind template, wide valuation-anchored stop not a tight chart level; time-stop 20 sessions"
+    },
+    {
+      "ticker": "MRVL",
+      "stop_limit": "Stop $224 (MA50) \u2014 beta/factor call, semis cycle correction; time-stop 15 sessions"
+    },
+    {
+      "ticker": "MU",
+      "stop_limit": "Stop $860 (MA50) \u2014 memory cycle mean-reversion, tax-sensitive winner; time-stop 20 sessions"
+    },
+    {
+      "ticker": "NVDA",
+      "stop_limit": "Stop $179 (2.5x ATR, ~$9 ATR14) \u2014 beta\u22481.9 vs SMH, negative residual IR historically so this is beta risk-management not alpha; time-stop 15 sessions"
+    },
+    {
+      "ticker": "NVTS",
+      "stop_limit": "Stop $13.50 (~2.5x ATR on wide vol band) \u2014 worst-drawdown position, oversold RSI 23.6 without confirmed catalyst; time-stop 10 sessions"
+    },
+    {
+      "ticker": "SOFI",
+      "stop_limit": "Stop $16.80 (MA50) \u2014 rate/credit factor, RSI 69.6 read as positioning not exhaustion; time-stop 20 sessions"
+    },
+    {
+      "ticker": "SPCX",
+      "stop_limit": "No chart stop \u2014 size cap at current 5.6% weight, monitor financing/dilution risk only; time-stop N/A (thesis-based, review quarterly)"
+    },
+    {
+      "ticker": "TSM",
+      "stop_limit": "Stop $420 (MA50) \u2014 beta/factor call, best-quality name in semis bucket; time-stop 15 sessions"
+    },
+    {
+      "ticker": "UBER",
+      "stop_limit": "Stop $69 \u2014 range-bound regime, require 2-3 session confirmation before acting; time-stop 20 sessions"
+    },
+    {
+      "ticker": "VRT",
+      "stop_limit": "Stop $310 (below MA20) \u2014 same AI-capex factor as semis, not a diversifier; time-stop 15 sessions"
+    }
+  ]
+}

@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;0,7..72,600;1,7..72,400&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=0.1.50" />
+  <link rel="stylesheet" href="styles.css?v=0.1.54" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
 </head>
@@ -21,7 +21,7 @@
         <span class="brand-mark"></span>
         <div>
           <p class="brand-name">Market Morning</p>
-          <p class="brand-sub" id="brand-sub">Your portfolio, clarified · v0.1.50</p>
+          <p class="brand-sub" id="brand-sub">Your portfolio, clarified · v0.1.54</p>
         </div>
       </div>
       <span id="live-dot" class="live-dot" role="status" aria-label="Checking connection…" title="Connection status"></span>
@@ -99,7 +99,9 @@
             <p id="picks-empty-desc" class="empty-desc">Fresh ideas outside your current holdings.</p>
             <button type="button" id="btn-picks" class="btn btn-primary">See today's picks</button>
           </div>
-          <button type="button" id="btn-refresh-picks" class="btn btn-refresh hidden">Refresh picks</button>
+          <div class="picks-refresh-row">
+            <button type="button" id="btn-refresh-picks" class="btn btn-refresh hidden">Refresh picks</button>
+          </div>
           <article id="content-picks" class="prose hidden"></article>
           <div id="picks-yesterday" class="picks-yesterday hidden">
             <div id="picks-yesterday-body" class="landing-card"></div>
@@ -247,6 +249,6 @@
   </div>
   <div id="glossary-popover" class="glossary-popover hidden" role="tooltip"></div>
   <div id="toast" class="toast hidden" role="status"></div>
-  <script src="app.js?v=0.1.50"></script>
+  <script src="app.js?v=0.1.54"></script>
 </body>
 </html>

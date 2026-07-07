@@ -91,6 +91,37 @@ _QUANT_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _QUANT_TTL = 900
 
 
+# Authoritative company identity for held tickers whose symbol is easily
+# mis-guessed from the ticker alone. The portfolio persona guessed "AIP" was an
+# aerospace name (it reads like one) when AIP is Arteris — semiconductor
+# on-chip interconnect (NoC) IP. Curated identity here is fed into the portfolio
+# context and wins over any inference, so the persona never derives a company's
+# business from its ticker symbol. Falls back to the live quote / symbol index
+# when a ticker isn't listed here.
+COMPANY_IDENTITY: dict[str, dict[str, str]] = {
+    "AIP": {"name": "Arteris, Inc.", "sector": "Technology", "industry": "Semiconductors"},
+    "NVTS": {"name": "Navitas Semiconductor", "sector": "Technology", "industry": "Semiconductors"},
+}
+
+
+def resolve_company_identity(
+    ticker: str,
+    name: str | None = None,
+    sector: str | None = None,
+    industry: str | None = None,
+) -> dict[str, str | None]:
+    """Merge best-available company identity: curated map wins, then any
+    provided (live-quote) fields. Callers layer a symbol-index lookup in for
+    the remaining gaps before calling this."""
+    t = (ticker or "").upper()
+    override = COMPANY_IDENTITY.get(t, {})
+    return {
+        "name": override.get("name") or (name if name and name != t else None) or name,
+        "sector": override.get("sector") or sector,
+        "industry": override.get("industry") or industry,
+    }
+
+
 def classify_ticker(ticker: str, sector: str | None = None, industry: str | None = None) -> str:
     t = (ticker or "").upper()
     if t in _TICKER_TEMPLATE:
@@ -213,18 +244,81 @@ def _regime(market: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _has_live_price(row: dict[str, Any]) -> bool:
-    """True only when the holding carries a real, positive live quote.
+    """True only when the holding carries a real, positive *live* quote.
 
     Missing/zero/unavailable quotes must be excluded from value/return/weight
     math so a single failed quote can never fabricate a $0 position or a bogus
-    -100% loss that drags equity into a false wipeout.
+    -100% loss that drags equity into a false wipeout. A row whose price/value
+    came from the broker snapshot (``source == "snapshot"``) is a display
+    fallback only — it is deliberately NOT counted as a live quote so equity
+    reconciliation still prefers the broker's authoritative aggregate.
     """
+    if row.get("source") == "snapshot":
+        return False
     price = row.get("price")
     value = row.get("value")
     return (
         isinstance(price, (int, float)) and price > 0
         and isinstance(value, (int, float)) and value > 0
     )
+
+
+def resolve_row_pricing(
+    shares: float,
+    avg_cost: float,
+    live_quote: dict[str, Any] | None,
+    snapshot_pos: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Per-row display pricing with live -> snapshot -> null precedence.
+
+    Returns ``price`` / ``value`` / ``return_pct`` / ``change_pct`` plus a
+    ``source`` ("live" | "snapshot" | None) and ``stale`` flag for the frontend.
+    Never fabricates $0 or -100%: when neither a live quote nor a broker
+    snapshot value is available, the numeric fields stay null so the client can
+    render "—" for that (rare) row.
+    """
+    shares = float(shares or 0)
+    avg_cost = float(avg_cost or 0)
+    live = live_quote or {}
+    raw_price = live.get("price")
+    if isinstance(raw_price, (int, float)) and raw_price > 0:
+        price = float(raw_price)
+        return {
+            "price": price,
+            "value": round(price * shares, 2),
+            "return_pct": round((price - avg_cost) / avg_cost * 100, 2) if avg_cost else None,
+            "change_pct": live.get("change_pct"),
+            "source": "live",
+            "stale": False,
+        }
+
+    snap = snapshot_pos or {}
+    snap_price = snap.get("price")
+    if isinstance(snap_price, (int, float)) and snap_price > 0:
+        price = float(snap_price)
+        snap_value = snap.get("market_value")
+        value = (
+            round(float(snap_value), 2)
+            if isinstance(snap_value, (int, float)) and snap_value > 0
+            else round(price * shares, 2)
+        )
+        return {
+            "price": price,
+            "value": value,
+            "return_pct": round((price - avg_cost) / avg_cost * 100, 2) if avg_cost else None,
+            "change_pct": snap.get("change_pct"),
+            "source": "snapshot",
+            "stale": True,
+        }
+
+    return {
+        "price": None,
+        "value": None,
+        "return_pct": None,
+        "change_pct": live.get("change_pct"),
+        "source": None,
+        "stale": True,
+    }
 
 
 def reconcile_equity(
@@ -336,7 +430,12 @@ def compute_portfolio_quant(
         atr_stop = round(price - 2.5 * atr, 2) if atr and price else None
         ret_pct = r.get("return_pct")
         large_winner = isinstance(ret_pct, (int, float)) and ret_pct >= 100
+        ident = resolve_company_identity(t, r.get("name") or r.get("company_name"),
+                                         r.get("sector"), r.get("industry"))
         per_ticker[t] = {
+            "company_name": ident["name"],
+            "sector": ident["sector"],
+            "industry": ident["industry"],
             "weight_pct": round(weight * 100, 1) if priced else None,
             "value": round(value, 2) if priced else None,
             "quote_unavailable": not priced,

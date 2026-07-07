@@ -79,6 +79,8 @@ For EACH holding, write a subsection:
 #### TICKER
 Open with one line: shares, avg cost, price, value, day %, return % (from context). Then one paragraph on fundamentals + technicals (MA20, MA50, RSI, volatility, profitability ratios).
 
+COMPANY IDENTITY (critical): Each holding's real company name, sector, and industry are provided in context (`quant.per_ticker[TICKER].company_name` / `.sector` / `.industry`, mirrored on each `portfolio` row). ALWAYS describe a holding using that provided identity. NEVER infer or guess what a company does from its ticker symbol — a ticker that merely reads like an industry (e.g. "AIP") is NOT evidence of that business. For example AIP is Arteris (semiconductor on-chip interconnect / NoC IP), not an aerospace name. The `sector_template` is a quant factor bucket for risk sizing, not the company's actual business — state the real sector/industry from the identity fields, and only mention the template as the factor bucket used for beta/correlation.
+
 QUOTE INTEGRITY (critical): A holding whose live quote did not resolve this sync is flagged with `quote_unavailable: true` in context (price/value/return are null, and its ticker appears in `quant.aggregates.quote_unavailable_tickers`). This is a transient feed gap, NOT a loss. For such a name, NEVER write "$0", "price $0", "value $0.00", "-100%", "wiped out", "100% loss", "data feed break", "reverse split", "delisting", or any wipeout/liquidation narrative. Instead, either use its broker snapshot value silently or add ONE neutral clause — "live quote unavailable this sync" — and move on to its fundamentals/technicals. Do not compute or imply a return for it. The account equity and total return you state come from `quant.aggregates` (which reconciles to the broker snapshot when any quote is stale) and MUST match `totals.value`/`totals.return_pct` — never a figure derived by summing only the resolved names.
 
 Then a blank line, then on its own line (with a space after the colon):
@@ -118,7 +120,7 @@ Rules:
 - Recommend ONLY tickers the user does NOT already hold. The candidate set has already been filtered to non-held names — every pick must be a fresh, non-held ticker.
 - NEVER pick a held name and then swap it. Do NOT write "already held", "already own", "skip", "wait", "Substitute:", "replacing", or any self-correction / selection narration. If a name you considered is already owned, silently choose a different candidate. The reader must never see how a pick was chosen or reconsidered.
 - Market cap generally > $10B for this section.
-- For each: rank, ticker, name, niche alpha thesis, key metrics, risk.
+- FORMAT — each pick is its OWN card. Start every pick with a level-3 markdown heading on its own line in EXACTLY this form: `### N. Company Name (TICKER)` (e.g. `### 1. Broadcom Inc. (AVGO)`), numbered 1–5 in rank order. Do NOT lead a pick with a bold line like `**1. AVGO — Broadcom Inc.**`. Under each heading, write the niche alpha thesis, key metrics, and risk as prose/bullets.
 - Do NOT include "Trade Plan" sections or allocation/sell instructions.
 - When using uncommon metrics (FCF, OCF, EBIT, EBITDA, NIM, EV/EBITDA, etc.), wrap them as `<term id="FCF">FCF</term>` so the UI can show definitions.
 
@@ -128,7 +130,7 @@ Each pick must cite at least one linked news article.
 
 # Top 5 Small-Cap & Growth Picks
 
-Same alpha-driven standard. Focus on smaller companies ($300M–$15B market cap), recent IPOs, venture-backed names, and emerging leaders with linked catalysts from today's research.
+Same alpha-driven standard. Focus on smaller companies ($300M–$15B market cap), recent IPOs, venture-backed names, and emerging leaders with linked catalysts from today's research. Use the SAME `### N. Company Name (TICKER)` heading-per-pick card format as the large-cap section, numbered 1–5.
 
 No Trade Plan sections. Use `<term id="...">` for uncommon financial metrics. Never explain how picks were selected or reference missing data — just deliver the five picks.
 
@@ -411,14 +413,14 @@ This is the closing part of a market deep-dive on "{topic}". US stocks/ETFs only
 
 PICKS_RANK_INSTRUCTION = """You are selecting and RANKING today's top stock picks, comparing every candidate head-to-head. Output ONLY a single JSON object — no markdown, no prose, no code fence — with this exact shape:
 
-{"large_cap":[{"rank":1,"ticker":"AVGO","name":"Broadcom","angle":"one-sentence non-obvious alpha thesis / specific catalyst","evidence":"[Headline](url) supporting it"}],"small_cap":[{"rank":1,"ticker":"...","name":"...","angle":"...","evidence":"[Headline](url)"}],"watchlist_adds":[{"ticker":"AVGO","reason":"why"}]}
+{"large_cap":[{"rank":1,"ticker":"AVGO","name":"Broadcom","angle":"one-sentence non-obvious alpha thesis / specific catalyst","evidence":"short headline phrase"}],"small_cap":[{"rank":1,"ticker":"...","name":"...","angle":"...","evidence":"short headline phrase"}],"watchlist_adds":[{"ticker":"AVGO","reason":"why"}]}
 
 Rules:
 - Choose EXACTLY 5 large-cap names (market cap generally > $10B) and EXACTLY 5 small-cap/growth names ($300M–$15B, recent IPOs, venture-backed, emerging leaders).
 - Recommend ONLY tickers the user does NOT already hold. `held_tickers` lists every owned name (and its share-class siblings) — never emit any of them, not even to substitute or comment on them. The candidate lists are already held-filtered; pick only from them.
 - Pick ONLY from the provided candidate tickers — never invent a symbol.
 - rank 1 = highest conviction; the ordering must be globally coherent and defensible head-to-head across the whole list.
-- Each `angle` is a specific, non-obvious catalyst or variant-vs-consensus view (never a generic bull case); each `evidence` cites one real linked article from the provided context.
+- Each `angle` is a specific, non-obvious catalyst or variant-vs-consensus view (never a generic bull case). Keep `evidence` to a SHORT headline phrase only (a few words) — do NOT paste article URLs or `[Headline](url)` markdown links here; the per-pick write-up adds the real linked source. Keep the whole JSON compact so it is never truncated.
 - watchlist_adds: the 2-4 strongest names worth tracking (valid tickers only)."""
 
 

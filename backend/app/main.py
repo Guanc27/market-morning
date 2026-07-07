@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from app.account import load_account
+from app.account import load_account, load_snapshot_positions
 from app.ai import AIService
 from app.ai_jobs import (
     BRIEF_AI_JOB,
@@ -34,7 +34,7 @@ from app.finance import finance_warm_status, get_quotes, warm_finance_cache
 from app.landing import get_explore_landing
 from app.logos import fetch_logo_bytes, logo_urls
 from app.mock_data import MOCK_HOLDINGS
-from app.portfolio_quant import reconcile_equity
+from app.portfolio_quant import reconcile_equity, resolve_row_pricing
 from app.research import get_research_progress, start_research_background
 from app.robinhood_sync import sync_robinhood
 from app.symbols import ensure_index, search_symbols, warm_index, warm_status
@@ -217,41 +217,37 @@ async def _invalidate_portfolio_analysis() -> None:
 async def get_portfolio() -> dict[str, Any]:
     holdings = await db.get_holdings()
     tickers = [h["ticker"] for h in holdings]
-    quotes, logos, account = await asyncio.gather(
+    quotes, logos, account, snapshot_positions = await asyncio.gather(
         asyncio.to_thread(get_quotes, tickers),
         asyncio.to_thread(logo_urls, tickers),
         asyncio.to_thread(load_account),
+        asyncio.to_thread(load_snapshot_positions),
     )
     enriched = []
-    total_value = 0.0
     total_cost = 0.0
     for h in holdings:
         q = quotes.get(h["ticker"], {})
-        raw_price = q.get("price")
-        # A missing/zero/unavailable live quote must NEVER be coerced to 0 —
-        # that fabricates value=0 and a bogus -100% return. Leave those fields
-        # null (stale) so the client can render "—" instead of a fake loss.
-        price_known = isinstance(raw_price, (int, float)) and raw_price > 0
-        price = float(raw_price) if price_known else None
-        cost = h["avg_cost"] * h["shares"]
-        total_cost += cost
-        if price_known:
-            value = price * h["shares"]
-            total_value += value
-            value_out = round(value, 2)
-            return_pct = round((price - h["avg_cost"]) / h["avg_cost"] * 100, 2) if h["avg_cost"] else None
-        else:
-            value_out = None
-            return_pct = None
+        # Per-row display prefers live -> broker snapshot -> null. A missing live
+        # quote must NEVER be coerced to $0/-100%; instead fall back to the real
+        # as-of-last-sync broker value so a genuinely-held position shows real
+        # numbers (source="snapshot", stale=True) rather than "—".
+        priced = resolve_row_pricing(
+            h["shares"],
+            h["avg_cost"],
+            q,
+            snapshot_positions.get(str(h["ticker"]).upper()),
+        )
+        total_cost += h["avg_cost"] * h["shares"]
         enriched.append({
             **h,
             "name": q.get("name"),
             "logo_url": logos.get(h["ticker"]),
-            "price": price,
-            "change_pct": q.get("change_pct"),
-            "value": value_out,
-            "return_pct": return_pct,
-            "stale": not price_known,
+            "price": priced["price"],
+            "change_pct": priced["change_pct"],
+            "value": priced["value"],
+            "return_pct": priced["return_pct"],
+            "stale": priced["stale"],
+            "source": priced["source"],
         })
     enriched.sort(key=lambda x: x.get("value") or 0, reverse=True)
     # Live quotes can be unavailable for illiquid or unrecognized tickers. Equity

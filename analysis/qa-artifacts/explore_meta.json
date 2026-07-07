@@ -1,0 +1,60 @@
+{
+  "actions": [
+    {
+      "id": "a1",
+      "label": "Trim AMD",
+      "detail": "AMD up 6.6% to $552.05 trades at 80.8x P/E and 52.1x EV/EBITDA versus NVDA's 34.3x EV/EBITDA despite far lower margins (12.5% net margin vs 55.6%) and ROIC (6.8% vs 93.96%). Take profits into rotation-driven strength.",
+      "tickers": [
+        "AMD"
+      ],
+      "type": "trim"
+    },
+    {
+      "id": "a2",
+      "label": "Buy QCOM on dips",
+      "detail": "QCOM at $186.48 trades at just 33.8x earnings and 14.0x EV/EBITDA, cheapest quality name in the group, with 28% operating margin, 23.3% ROE, and a 2.08% dividend yield backed by 91.5% FCF/OCF conversion. Accumulate on pullback toward $175-180.",
+      "tickers": [
+        "QCOM"
+      ],
+      "type": "buy"
+    },
+    {
+      "id": "a3",
+      "label": "Hold TSM core position",
+      "detail": "TSM up 4.06% to $451.79 with 50.8% operating margin, 44.6% net margin, and 35.1% ROE \u2014 best profitability/scale combination in semis and irreplaceable foundry supplier to NVDA, AMD, AAPL, QCOM. Hold as structural anchor.",
+      "tickers": [
+        "TSM"
+      ],
+      "type": "hold"
+    },
+    {
+      "id": "a4",
+      "label": "Avoid Intel longs",
+      "detail": "INTC bounced 1.54% to $122.20 but remains operating-margin negative (-0.04%), ROE negative (-0.23%), and FCF/OCF negative (-51%). Trades at only 1.46x book versus peers at 5-29x, reflecting justified skepticism on turnaround. Avoid chasing strength.",
+      "tickers": [
+        "INTC"
+      ],
+      "type": "sell"
+    },
+    {
+      "id": "a5",
+      "label": "Watch ASML for entry",
+      "detail": "ASML up 3.15% to $1825.07 with best-in-class 51.6% ROIC and 50.5% ROE from EUV monopoly, but trades at 43.1x earnings. Watch for pullback toward $1650-1700 or export-policy risk before adding.",
+      "tickers": [
+        "ASML"
+      ],
+      "type": "watch"
+    }
+  ],
+  "watchlist_adds": [
+    {
+      "ticker": "ASML",
+      "reason": "Monitor for pullback entry given EUV monopoly and best-in-class capital returns, but rich valuation and China export-policy risk"
+    },
+    {
+      "ticker": "INTC",
+      "reason": "Track foundry customer wins and capacity utilization before considering re-entry given persistent negative FCF"
+    }
+  ],
+  "positions": []
+}

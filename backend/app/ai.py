@@ -43,14 +43,21 @@ from app.analysis_export import write_analysis_md
 from app.config import settings
 from app.db import Database
 from app.finance import get_market_snapshot, get_quotes, market_peers, portfolio_metrics, portfolio_technicals, screen_candidates
-from app.account import load_account
+from app.account import load_account, load_snapshot_positions
 from app.mock_data import (
     mock_explore_market,
     mock_morning_brief,
     mock_top_picks,
 )
 from app.news import flatten_news, get_news_bundle
-from app.portfolio_quant import compute_portfolio_quant, portfolio_concentration, reconcile_equity
+from app.portfolio_quant import (
+    compute_portfolio_quant,
+    portfolio_concentration,
+    reconcile_equity,
+    resolve_company_identity,
+    resolve_row_pricing,
+)
+from app.symbols import get_cached_symbol
 from app.research import get_market_research_bundle
 from app.prompts import (
     BRIEF_SECTION_SPECS,
@@ -120,16 +127,24 @@ MAX_TOKENS_PORTFOLIO = 8192
 # Per-call cap for the fan-out brief: each of the ~10 concurrent sub-calls emits
 # one section (~350-550 words) well under this, so no single call truncates.
 MAX_TOKENS_BRIEF_SECTION = 2000
-# Explore fan-out: one section per concurrent sub-call. Kept comfortably above
-# the ~350-550 word section length so a body never truncates mid-heading.
-MAX_TOKENS_EXPLORE_SECTION = 2400
+# Explore fan-out: one section per concurrent sub-call. The Key-Metrics
+# comparison enumerates every player's profitability / growth / valuation /
+# balance-sheet lines, so it is the longest body section; 2400 clipped it
+# mid-sentence ("…with interest coverage" → nothing). Raised to give that
+# section enough headroom to close its final clause.
+MAX_TOKENS_EXPLORE_SECTION = 3400
 # The ideas sub-call emits the Actionable Ideas markdown AND the mm-meta JSON, so
 # it needs extra headroom — a too-tight cap truncated the JSON mid-string and
 # left an unclosed ```mm-meta fence in stored output.
 MAX_TOKENS_EXPLORE_IDEAS = 3200
 MAX_TOKENS_EXPLORE_OVERVIEW = 2000
 # Picks fan-out: a single ranking call (JSON) then one concurrent call per pick.
-MAX_TOKENS_PICKS_RANK = 1600
+# The ranking JSON carries up to 10 picks (name/angle/evidence each) + a
+# watchlist_adds list; too tight a cap truncated it mid-JSON, failed the parse,
+# and forced the meta-prone single-call fallback. Kept with headroom (and the
+# rank `evidence` no longer embeds long article URLs — the per-pick detail pass
+# cites the real links — which is what was blowing the budget).
+MAX_TOKENS_PICKS_RANK = 3000
 MAX_TOKENS_PICKS_DETAIL = 1400
 
 _PLACEHOLDER_MARKERS = ("**Setup required:**", "**API key rejected:**")
@@ -190,8 +205,58 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
             parsed = json.loads(match.group(0))
             return parsed if isinstance(parsed, dict) else None
         except json.JSONDecodeError:
-            return None
-    return None
+            pass
+    # Last resort: the response is a JSON object that truncated mid-array (the
+    # model hit its token cap). Salvage the complete elements by cutting back to
+    # the last closed bracket and re-closing whatever is still open, so a
+    # slightly-over-budget ranking still yields its finished picks instead of
+    # forcing the meta-prone single-call fallback.
+    return _repair_truncated_json(candidate)
+
+
+def _scan_bracket_stack(text: str) -> tuple[list[str], int | None]:
+    """Walk JSON-ish text (string-aware) tracking the open '{'/'[' stack and the
+    index just past the last closed bracket. Used to salvage truncated JSON."""
+    stack: list[str] = []
+    last_close: int | None = None
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            last_close = i + 1
+    return stack, last_close
+
+
+def _repair_truncated_json(text: str) -> dict[str, Any] | None:
+    start = text.find("{")
+    if start == -1:
+        return None
+    s = text[start:]
+    _, last_close = _scan_bracket_stack(s)
+    if not last_close:
+        return None
+    frag = s[:last_close]  # ends exactly on a closing bracket → no dangling token
+    stack, _ = _scan_bracket_stack(frag)
+    closers = "".join("}" if c == "{" else "]" for c in reversed(stack))
+    try:
+        parsed = json.loads(frag + closers)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        return None
 
 
 # --- Held-ticker exclusion for picks ----------------------------------------
@@ -476,37 +541,49 @@ class AIService:
         tickers = [h["ticker"] for h in holdings]
         quotes = get_quotes(tickers) if tickers else {}
         account = load_account()
+        snapshot_positions = load_snapshot_positions()
         portfolio_rows = []
         total_cost = 0.0
         for h in holdings:
             q = quotes.get(h["ticker"], {})
-            raw_price = q.get("price")
-            # A missing/zero/unavailable live quote must NEVER be coerced to 0 —
-            # that fabricates value=0 and a bogus -100% per-name loss, which then
-            # understates equity and makes the analysis narrate a false wipeout.
-            # Leave price/value/return null (stale) so the model treats it as a
-            # quote-unavailable name rather than a total loss.
-            price_known = isinstance(raw_price, (int, float)) and raw_price > 0
-            cost = h["avg_cost"] * h["shares"]
-            total_cost += cost
-            if price_known:
-                price = float(raw_price)
-                value = price * h["shares"]
-                value_out = round(value, 2)
-                ret = round((price - h["avg_cost"]) / h["avg_cost"] * 100, 2) if h["avg_cost"] else None
-            else:
-                price = None
-                value_out = None
-                ret = None
+            # Per-name pricing prefers live -> broker snapshot -> null. A missing
+            # live quote must NEVER be coerced to 0 (that fabricates a -100%
+            # wipeout); the broker snapshot supplies a real as-of-last-sync value
+            # so the analysis sees genuine numbers. Only truly-unpriced names stay
+            # null. Snapshot-sourced rows are excluded from live-equity math in
+            # reconcile_equity() so the reconciled total stays authoritative.
+            priced = resolve_row_pricing(
+                h["shares"],
+                h["avg_cost"],
+                q,
+                snapshot_positions.get(str(h["ticker"]).upper()),
+            )
+            total_cost += h["avg_cost"] * h["shares"]
+            # Authoritative company identity so the quant persona never guesses a
+            # company's business from its ticker (e.g. "AIP" is Arteris — chip IP,
+            # NOT aerospace). Layer: curated map (wins) → live quote → symbol index
+            # for any field the live quote couldn't resolve (common off-hours).
+            name = q.get("name")
+            sector = q.get("sector")
+            industry = q.get("industry")
+            if not (name and name != h["ticker"]) or not sector or not industry:
+                sym = get_cached_symbol(h["ticker"]) or {}
+                name = name if (name and name != h["ticker"]) else (sym.get("name") or name)
+                sector = sector or sym.get("sector") or None
+                industry = industry or sym.get("industry") or None
+            ident = resolve_company_identity(h["ticker"], name, sector, industry)
             portfolio_rows.append({
                 **h,
-                "price": price,
-                "value": value_out,
-                "return_pct": ret,
-                "name": q.get("name"),
-                "sector": q.get("sector"),
-                "industry": q.get("industry"),
-                "quote_unavailable": not price_known,
+                "price": priced["price"],
+                "value": priced["value"],
+                "return_pct": priced["return_pct"],
+                "name": ident["name"],
+                "company_name": ident["name"],
+                "sector": ident["sector"],
+                "industry": ident["industry"],
+                "source": priced["source"],
+                "stale": priced["stale"],
+                "quote_unavailable": priced["source"] is None,
             })
         # Equity reconciliation (snapshot fallback when any quote is stale) is
         # centralized in reconcile_equity() — one implementation for every path.
@@ -1002,13 +1079,24 @@ class AIService:
             "held_tickers": sorted(held_expanded),
             "watchlist": watch,
         }
-        try:
-            rank_raw = self._chat(picks_rank_system(), json.dumps(rank_payload, default=str),
-                                  max_tokens=MAX_TOKENS_PICKS_RANK, model=settings.anthropic_model_fast)
-        except Exception:
-            return None
-        ranking = _extract_json_object(rank_raw)
+        rank_user = json.dumps(rank_payload, default=str)
+        # The ranking JSON is the fan-out's single point of failure: if it fails
+        # to parse the whole path falls back to the meta-prone single call. Retry
+        # once (a truncated/garbled JSON is usually transient) before giving up.
+        ranking: dict[str, Any] | None = None
+        for attempt in range(2):
+            try:
+                rank_raw = self._chat(picks_rank_system(), rank_user,
+                                      max_tokens=MAX_TOKENS_PICKS_RANK, model=settings.anthropic_model_fast)
+            except Exception:
+                logger.warning("picks fan-out: ranking call raised (attempt %d/2)", attempt + 1)
+                continue
+            ranking = _extract_json_object(rank_raw)
+            if ranking:
+                break
+            logger.warning("picks fan-out: ranking JSON did not parse (attempt %d/2)", attempt + 1)
         if not ranking:
+            logger.warning("picks fan-out: no usable ranking after retries — falling back to single call")
             return None
 
         def _clean_picks(items: Any) -> list[dict[str, Any]]:
@@ -1088,13 +1176,29 @@ class AIService:
                 completed += 1
                 set_picks_progress(min(90, 55 + int(completed / total * 33)), "Writing picks…")
 
+        # Retry any dropped detail once — a single empty/failed sub-call would
+        # otherwise starve a section below the 3-pick threshold and force the
+        # meta-prone single-call fallback for the WHOLE run.
         dropped_picks = [(s, i, p) for s, i, p in detail_specs if (s, i) not in details]
         if dropped_picks:
             logger.warning(
-                "picks fan-out dropped %d/%d pick detail(s): %s",
+                "picks fan-out dropped %d/%d pick detail(s) on first pass, retrying: %s",
                 len(dropped_picks), total,
                 ", ".join(f"{s}:{p['ticker']}" for s, _i, p in dropped_picks),
             )
+            with ThreadPoolExecutor(max_workers=min(_FANOUT_MAX_WORKERS, len(dropped_picks))) as pool:
+                futs = [pool.submit(_run_detail, s, i, p) for s, i, p in dropped_picks]
+                for fut in as_completed(futs):
+                    section, idx, text = fut.result()
+                    if text and not _is_placeholder_content(text):
+                        details[(section, idx)] = text
+            still_dropped = [(s, i, p) for s, i, p in dropped_picks if (s, i) not in details]
+            if still_dropped:
+                logger.warning(
+                    "picks fan-out: %d detail(s) still missing after retry: %s",
+                    len(still_dropped),
+                    ", ".join(f"{s}:{p['ticker']}" for s, _i, p in still_dropped),
+                )
 
         def _assemble(section: str, picks: list[dict[str, Any]]) -> list[str]:
             lines: list[str] = []
@@ -1271,8 +1375,11 @@ class AIService:
             body = sanitize_ai_output(out or "")
             # A section body that truncated mid-generation can end on an empty or
             # cut-off heading (e.g. "### Cross-Compar"); drop it so no broken or
-            # empty heading is stitched into the deep-dive.
+            # empty heading is stitched into the deep-dive. It can also stop
+            # mid-clause (e.g. "…with interest coverage" with nothing after) —
+            # trim that dangling partial final sentence too.
             body = review_gate.strip_trailing_partial_heading(body)
+            body = review_gate.strip_trailing_partial_sentence(body)
             return order, body, None
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1320,6 +1427,7 @@ class AIService:
                 # and left its bullets orphaned under the ## section heading.
                 text = re.sub(r"^\s*#{1,2}\s+.*\n?", "", text, count=1) if text.lstrip().startswith("#") else text
                 text = review_gate.strip_trailing_partial_heading(text)
+                text = review_gate.strip_trailing_partial_sentence(text)
                 if not text.strip():
                     continue
                 text = f"## {heading}\n\n{text.strip()}"

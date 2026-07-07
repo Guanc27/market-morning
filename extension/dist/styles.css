@@ -175,7 +175,11 @@ html, body {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  margin: 4px 4px 12px;
+  /* Vertically center the group between the mini-brief card above (which carries
+     a 28px bottom margin) and the brief sheet below (no top margin). The -12px
+     top pulls the group up into that 28px so the effective space is 16px above
+     and 16px below — balanced, with the excess bottom gap trimmed. */
+  margin: -12px 4px 16px;
   padding: 0 2px;
   text-align: center;
 }
@@ -1266,7 +1270,7 @@ button.btn-loading,
 
 .portfolio-analysis-block {
   margin-top: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .portfolio-analysis-block .prose {
@@ -1283,21 +1287,33 @@ button.btn-loading,
 
 .portfolio-holdings-header {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 6px;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
 .portfolio-holdings-header .section-label {
   margin-bottom: 0;
+  font-size: var(--fs-15);
+}
+
+/* Standalone picks refresh pill — mirror .brief-meta so the button is
+   horizontally centered between the picks content and the yesterday area.
+   Collapses to zero height while the button is .hidden. */
+.picks-refresh-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Refresh buttons in these header rows are compact actions, not full-width
-   CTAs. .btn forces width:100%, which (with a short label like "Holdings")
-   lets the button stretch across the row so its centered text floats and
-   looks off. Pin them to their content and align right. */
+   CTAs. .btn forces width:100%, which would stretch the pill across the row.
+   Pin them to their content; their centered container handles alignment. */
 .portfolio-holdings-header .btn,
+.picks-refresh-row .btn,
 .brief-meta .btn {
   width: auto;
   flex: 0 0 auto;

@@ -1,0 +1,24 @@
+{
+  "watchlist_adds": [
+    {
+      "ticker": "AVGO",
+      "reason": "Cheapest AI-capex derivative among mega-cap semis with custom-silicon moat"
+    },
+    {
+      "ticker": "META",
+      "reason": "Cheapest mega-cap AI compounder on forward P/E, direct beneficiary of hyperscaler rotation"
+    },
+    {
+      "ticker": "LMND",
+      "reason": "Largest single-day mover in small-cap set, AI-underwriting insurtech inflection"
+    },
+    {
+      "ticker": "ACHR",
+      "reason": "eVTOL regulatory catalyst play, high-beta aerospace momentum name"
+    },
+    {
+      "ticker": "FLNC",
+      "reason": "Grid-storage read-through on AI power demand and renewables/storage geopolitical thesis"
+    }
+  ]
+}

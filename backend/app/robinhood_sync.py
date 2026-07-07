@@ -68,6 +68,57 @@ def _parse_positions(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return holdings
 
 
+def _parse_quotes(raw: dict[str, Any]) -> dict[str, dict[str, float]]:
+    """Map symbol -> {price, prev_close} from get_equity_quotes.
+
+    The broker is the authoritative price source; captured at sync time so a
+    holding whose flaky live quote (yfinance/FMP) later fails still has a real,
+    as-of-last-sync price/value to display instead of "—".
+    """
+    results = raw.get("data", {}).get("results") or raw.get("results") or []
+    out: dict[str, dict[str, float]] = {}
+    for entry in results:
+        quote = (entry or {}).get("quote") or {}
+        symbol = quote.get("symbol")
+        if not symbol:
+            continue
+        price = _to_float(quote.get("last_trade_price")) or _to_float(quote.get("last_non_reg_trade_price"))
+        if not price or price <= 0:
+            continue
+        prev = _to_float(quote.get("adjusted_previous_close")) or _to_float(quote.get("previous_close"))
+        row: dict[str, float] = {"price": price}
+        if prev and prev > 0:
+            row["prev_close"] = prev
+        out[str(symbol).upper()] = row
+    return out
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _enrich_holdings_with_quotes(
+    holdings: list[dict[str, Any]], quotes: dict[str, dict[str, float]]
+) -> None:
+    """Attach broker price / market_value / change_pct to each snapshot holding."""
+    for h in holdings:
+        q = quotes.get(str(h.get("ticker", "")).upper())
+        if not q:
+            continue
+        price = q.get("price")
+        if not price or price <= 0:
+            continue
+        shares = float(h.get("shares") or 0)
+        h["price"] = round(price, 2)
+        h["market_value"] = round(price * shares, 2)
+        prev = q.get("prev_close")
+        if prev and prev > 0:
+            h["change_pct"] = round((price - prev) / prev * 100, 2)
+
+
 def _parse_account(raw: dict[str, Any]) -> dict[str, Any]:
     data = raw.get("data") or raw
     bp = data.get("buying_power") or {}
@@ -112,9 +163,21 @@ async def _fetch_via_mcp() -> dict[str, Any] | None:
         raise RuntimeError("No Robinhood account found")
     positions = await client.call_tool("get_equity_positions", {"account_number": account_number})
     portfolio = await client.call_tool("get_portfolio", {"account_number": account_number})
+    holdings = _parse_positions(positions)
+    # Capture authoritative broker prices per position so the display can fall
+    # back to real, as-of-last-sync values when the flaky live quote provider
+    # (yfinance/FMP) can't resolve a ticker. Never fail the sync over quotes.
+    if holdings:
+        try:
+            quotes = await client.call_tool(
+                "get_equity_quotes", {"symbols": [h["ticker"] for h in holdings]}
+            )
+            _enrich_holdings_with_quotes(holdings, _parse_quotes(quotes))
+        except Exception:
+            pass
     return {
         "account_number": account_number,
-        "holdings": _parse_positions(positions),
+        "holdings": holdings,
         "account": _parse_account(portfolio),
         "source": "mcp",
     }

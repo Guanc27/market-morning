@@ -9,7 +9,7 @@ const OFFLINE_MSG = "Can't reach Market Morning right now";
 const OFFLINE_HINT = "The app may still be starting — give it a moment and try again.";
 const RECONNECT_MSG = "Reconnecting…";
 const RETRY_BUSY_MSG = "Still waking up — trying again…";
-const APP_VERSION = "0.1.50";
+const APP_VERSION = "0.1.54";
 
 function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1217,6 +1217,15 @@ function mdInner(text, opts = {}) {
   // are untouched) so it becomes a real <ol><li> and the CSS counter can bold
   // the index to match the bold title.
   src = src.replace(/^(\s*\d+)\.(?=[^\s\d])/gm, "$1. ");
+  // Unordered analog of the ordered-list fix above: models also glue a bullet
+  // marker straight onto bold ("-**MRK**— …" / "+**MRK**"), which lacks the
+  // space `/^[-*] /` needs — so the whole run collapses into one <p> with
+  // literal leading dashes instead of a <ul>. Insert the missing space (and
+  // canonicalize the marker to "- ") only when the marker is glued to a bold
+  // run (** / __) or a word, so "- item" bullets, "-5%" negatives, em-dashes,
+  // and "---" rules stay untouched. "*" is intentionally excluded: a leading
+  // "*"/"**" is emphasis syntax, so normalizing it would corrupt real bold.
+  src = src.replace(/^(\s*)[-+](?=\*\*|__|[A-Za-z])/gm, "$1- ");
   const fenced = [];
   const stripped = src.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code) => {
     const i = fenced.length;
@@ -3475,11 +3484,13 @@ document.addEventListener("keydown", (e) => {
   hideGlossaryNow();
 });
 
+// Brief is the default landing view — hydrate it first so its first paint
+// isn't blocked behind synchronous cache parsing/rendering for hidden panels.
+initBriefPanelState();
 hydratePortfolioCache();
 hydrateExploreCache();
 const _exploreLandingCached = readExploreLandingCache();
 if (_exploreLandingCached) renderExploreLandingData(_exploreLandingCached);
-initBriefPanelState();
 initPicksPanelState();
 bindButtonPressFeedback();
 attachHoldingModalHandlers();
@@ -3493,15 +3504,20 @@ attachHoldingModalHandlers();
     }
   })();
 
+  // Brief is the landing view — fetch /brief/recap as soon as the backend is
+  // reachable, in parallel with (not gated behind) portfolio refresh and the
+  // Robinhood sync. This removes the first-open lag where the brief hydrate
+  // spinner lingered while unrelated portfolio work ran first.
+  const briefP = healthP.then(() => loadBriefLanding());
+
   const portfolioP = refreshPortfolio();
 
   const syncP = syncRobinhoodPortfolio(false).catch(() => {});
 
-  await Promise.all([healthP, portfolioP, syncP]);
+  await Promise.all([healthP, briefP, portfolioP, syncP]);
   setInterval(pingBackend, 25000);
   request("/research/start", { method: "POST" }).catch(() => {});
   refreshWatchlist();
-  loadBriefLanding();
   loadPicksYesterday();
   loadExploreLanding();
   resumePortfolioJobIfNeeded();
