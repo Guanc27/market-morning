@@ -1,0 +1,31 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8742:8742"
+    environment:
+      SAAS_MODE: "1"
+      BACKEND_HOST: "0.0.0.0"
+      BACKEND_PORT: "8742"
+      WEB_APP_URL: "http://localhost:8742/app"
+      CORS_ORIGINS: "http://localhost:8742,http://127.0.0.1:8742"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
+      AUTH_PASSWORD_SALT: ${AUTH_PASSWORD_SALT:-dev-salt-change-me}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_PRO_MONTHLY: ${STRIPE_PRICE_PRO_MONTHLY:-}
+      STRIPE_PRICE_PRO_YEARLY: ${STRIPE_PRICE_PRO_YEARLY:-}
+      STRIPE_PRICE_DESK_MONTHLY: ${STRIPE_PRICE_DESK_MONTHLY:-}
+      STRIPE_PRICE_DESK_YEARLY: ${STRIPE_PRICE_DESK_YEARLY:-}
+      DATABASE_PATH: /data/market_morning.db
+    volumes:
+      - mm_data:/data
+      - ./backend/data/finance_cache:/app/backend/data/finance_cache
+      - ./backend/data/research_cache:/app/backend/data/research_cache
+    restart: unless-stopped
+
+volumes:
+  mm_data:

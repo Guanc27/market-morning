@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="160" y1="128" x2="864" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2d5a4f"/>
+      <stop offset="50%" stop-color="#1a3c34"/>
+      <stop offset="100%" stop-color="#0f241e"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <!-- rising sun -->
+  <path d="M512 688c-120 0-216-96-216-216 0-120 96-216 216-216s216 96 216 216c0 120-96 216-216 216z" fill="#e8622a"/>
+  <!-- stock trend (no horizon bar behind) -->
+  <path d="M240 600l168-120 136 72 152-136 128 144" stroke="#f6f4ef" stroke-width="36" stroke-linecap="round" stroke-linejoin="round" opacity="0.92"/>
+</svg>
