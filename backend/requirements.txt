@@ -17,3 +17,4 @@ python-multipart==0.0.32
 aiosqlite==0.22.1
 mcp==1.28.1
 feedparser==6.0.12
+stripe==12.5.1

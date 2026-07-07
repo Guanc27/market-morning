@@ -9,13 +9,19 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.account import load_account, load_snapshot_positions
 from app.ai import AIService
+from app.auth import decode_access_token, get_current_user_id
+from app.saas_routes import router as saas_router
+from app.subscriptions import Feature, tier_spec
+from app.tenant import set_tenant_user_id
+from app.usage import UsageService
 from app.ai_jobs import (
     BRIEF_AI_JOB,
     EXPLORE_JOB,
@@ -86,8 +92,41 @@ async def lifespan(app: FastAPI):
     yield
 
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 app = FastAPI(title="Market Morning API", version=APP_VERSION, lifespan=lifespan)
+app.state.db = db
+app.include_router(saas_router)
+
+
+def _cors_origins() -> list[str]:
+    if settings.saas_mode:
+        return [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    return _ALLOWED_ORIGINS
+
+
+@app.middleware("http")
+async def _tenant_context(request: Request, call_next):
+    if settings.saas_mode:
+        user_id = None
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            try:
+                user_id = int(decode_access_token(auth[7:].strip())["sub"])
+            except Exception:
+                user_id = None
+        if user_id is None:
+            token = request.cookies.get(settings.session_cookie_name)
+            if token:
+                try:
+                    user_id = int(decode_access_token(token)["sub"])
+                except Exception:
+                    user_id = None
+        if user_id is not None:
+            set_tenant_user_id(user_id)
+    else:
+        set_tenant_user_id(1)
+    return await call_next(request)
+
 
 # --- Local-only access hardening (CSRF / DNS-rebinding) ----------------------
 # The backend binds to loopback and is consumed by the local file:// WebView.
@@ -123,6 +162,8 @@ def _origin_is_allowed(origin: str) -> bool:
 
 @app.middleware("http")
 async def _local_only_guard(request: Request, call_next):
+    if settings.saas_mode:
+        return await call_next(request)
     origin = request.headers.get("origin")
     # A real cross-site Origin (a page on another host driving the browser) is
     # rejected outright — this is the localhost-CSRF / rebinding vector, esp. for
@@ -139,12 +180,33 @@ async def _local_only_guard(request: Request, call_next):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_ALLOWED_ORIGINS,
-    allow_origin_regex=_ALLOWED_ORIGIN_REGEX,
-    allow_credentials=False,
+    allow_origins=_cors_origins(),
+    allow_origin_regex=None if settings.saas_mode else _ALLOWED_ORIGIN_REGEX,
+    allow_credentials=settings.saas_mode,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+async def _usage_for(request: Request) -> UsageService:
+    return UsageService(request.app.state.db)
+
+
+async def _gate(request: Request, user_id: int, feature: Feature, event: str | None = None, *, force: bool = False) -> None:
+    if not settings.saas_mode:
+        return
+    usage = await _usage_for(request)
+    await usage.require_feature(user_id, feature)
+    if event:
+        await usage.consume(user_id, event, force=force)
+
+
+async def _subscription_meta(request: Request, user_id: int) -> dict[str, Any]:
+    if not settings.saas_mode:
+        return {"tier": "desk", "saas_mode": False}
+    usage = await _usage_for(request)
+    summary = await usage.usage_summary(user_id)
+    return {"tier": summary["tier"], "saas_mode": True, "usage": summary}
 
 
 @lru_cache(maxsize=1)
@@ -201,6 +263,7 @@ async def health() -> dict[str, Any]:
         "git_sha": stamp["git_sha"],
         "started_at": stamp["started_at"],
         "mock_mode": settings.mock_mode,
+        "saas_mode": settings.saas_mode,
         "anthropic_configured": bool(settings.anthropic_api_key) or settings.mock_mode,
         "fmp_configured": bool(settings.fmp_api_key),
         "robinhood_configured": bool(
@@ -214,7 +277,7 @@ async def _invalidate_portfolio_analysis() -> None:
 
 
 @app.get("/portfolio")
-async def get_portfolio() -> dict[str, Any]:
+async def get_portfolio(user_id: int = Depends(get_current_user_id)) -> dict[str, Any]:
     holdings = await db.get_holdings()
     tickers = [h["ticker"] for h in holdings]
     quotes, logos, account, snapshot_positions = await asyncio.gather(
@@ -274,7 +337,12 @@ async def get_portfolio() -> dict[str, Any]:
 
 
 @app.post("/portfolio/sync-robinhood")
-async def sync_robinhood_portfolio(force: bool = False) -> dict[str, Any]:
+async def sync_robinhood_portfolio(
+    request: Request,
+    force: bool = False,
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    await _gate(request, user_id, Feature.ROBINHOOD_SYNC)
     result = await sync_robinhood(db, force=force)
     result["portfolio"] = await get_portfolio()
     if result.get("synced"):
@@ -316,14 +384,31 @@ async def delete_holding(ticker: str) -> dict[str, bool]:
 
 
 @app.get("/portfolio/analysis")
-async def portfolio_analysis(force: bool = False) -> dict[str, Any]:
-    # Content is finalized/sanitized ONCE at generation and stored clean; serve
-    # the stored artifact verbatim (no per-read scrub).
-    return await ai.portfolio_analysis(force=force)
+async def portfolio_analysis(
+    request: Request,
+    force: bool = False,
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    await _gate(request, user_id, Feature.PORTFOLIO_ANALYSIS)
+    if force:
+        await _gate(request, user_id, Feature.PORTFOLIO_ANALYSIS_REFRESH, "portfolio_analysis_refresh", force=True)
+        await _gate(request, user_id, Feature.PORTFOLIO_ANALYSIS, "portfolio_analysis", force=True)
+    result = await ai.portfolio_analysis(force=force)
+    return {**result, **await _subscription_meta(request, user_id)}
 
 
 @app.post("/portfolio/analysis/start")
-async def portfolio_analysis_start(force: bool = False) -> dict[str, Any]:
+async def portfolio_analysis_start(
+    request: Request,
+    force: bool = False,
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    await _gate(request, user_id, Feature.PORTFOLIO_ANALYSIS)
+    if force:
+        await _gate(request, user_id, Feature.PORTFOLIO_ANALYSIS_REFRESH, "portfolio_analysis_refresh", force=True)
+        await _gate(request, user_id, Feature.PORTFOLIO_ANALYSIS, "portfolio_analysis", force=True)
+    else:
+        await _gate(request, user_id, Feature.PORTFOLIO_ANALYSIS, "portfolio_analysis", force=False)
     if not force:
         cached = await ai.portfolio_analysis(force=False)
         content = (cached.get("content") or "").strip()
@@ -367,12 +452,22 @@ async def brief_landing() -> dict[str, Any]:
 
 
 @app.post("/brief/mini")
-async def mini_brief() -> dict[str, Any]:
+async def mini_brief(
+    request: Request,
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    await _gate(request, user_id, Feature.LATE_DAY, "late_day")
     return await ai.mini_brief()
 
 
 @app.post("/brief/start")
-async def brief_start(force: bool = False) -> dict[str, Any]:
+async def brief_start(
+    request: Request,
+    force: bool = False,
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    if force:
+        await _gate(request, user_id, Feature.BRIEF_REGEN, "brief_regen", force=True)
     if not force:
         row = await db.get_brief_for_today_full()
         content = normalize_brief_title((row or {}).get("content") or "")
@@ -392,18 +487,41 @@ async def brief_start(force: bool = False) -> dict[str, Any]:
 
 
 @app.get("/picks/today")
-async def picks_today() -> dict[str, Any]:
+async def picks_today(
+    request: Request,
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    usage = await _usage_for(request)
+    tier = await usage.get_user_tier(user_id)
+    spec = tier_spec(tier)
+    if settings.saas_mode and spec.picks_preview_only:
+        preview = await db.get_yesterday_picks_preview()
+        return {
+            "content": "",
+            "cached": False,
+            "premium_required": True,
+            "preview": preview,
+            "tier": tier.value,
+        }
     today = datetime.now(timezone.utc).date().isoformat()
     row = await db.get_picks_by_date(today)
     if not row:
-        return {"content": "", "cached": False}
+        return {"content": "", "cached": False, "tier": tier.value}
     content = row.get("content") or ""
     meta = row.get("meta") or {}
-    return {"content": content, "cached": bool(content.strip()), "meta": meta}
+    return {"content": content, "cached": bool(content.strip()), "meta": meta, "tier": tier.value}
 
 
 @app.post("/picks/start")
-async def picks_start(force: bool = False) -> dict[str, Any]:
+async def picks_start(
+    request: Request,
+    force: bool = False,
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    await _gate(request, user_id, Feature.PICKS)
+    if force:
+        await _gate(request, user_id, Feature.PICKS_REFRESH, "picks_refresh", force=True)
+    await _gate(request, user_id, Feature.PICKS, "picks", force=force)
     today = datetime.now(timezone.utc).date().isoformat()
     if not force:
         row = await db.get_picks_by_date(today)
@@ -539,7 +657,12 @@ async def explore_market(body: ExploreIn) -> dict[str, Any]:
 
 
 @app.post("/explore/start")
-async def explore_start(body: ExploreIn) -> dict[str, Any]:
+async def explore_start(
+    body: ExploreIn,
+    request: Request,
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    await _gate(request, user_id, Feature.EXPLORE, "explore")
     market = body.market.strip()
     if not market:
         raise HTTPException(status_code=400, detail="market is required")
@@ -571,7 +694,15 @@ async def get_watchlist() -> dict[str, Any]:
 
 
 @app.post("/watchlist")
-async def add_watchlist(body: WatchlistIn) -> dict[str, Any]:
+async def add_watchlist(
+    body: WatchlistIn,
+    request: Request,
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    if settings.saas_mode:
+        usage = await _usage_for(request)
+        items = await db.get_watchlist()
+        await usage.check_watchlist_limit(user_id, len(items))
     return await db.add_watchlist(body.ticker, body.notes, body.source)
 
 
@@ -596,3 +727,12 @@ async def choose_action(body: ChooseActionIn) -> dict[str, Any]:
 @app.get("/memory")
 async def get_memory() -> dict[str, Any]:
     return {"entries": await db.get_memory()}
+
+
+# Standalone web app (SaaS) — static UI at /app
+_web_root = Path(__file__).resolve().parent.parent.parent / "web"
+_ext_root = Path(__file__).resolve().parent.parent.parent / "extension" / "dist"
+if _ext_root.is_dir():
+    app.mount("/extension/dist", StaticFiles(directory=str(_ext_root)), name="extension")
+if _web_root.is_dir():
+    app.mount("/app", StaticFiles(directory=str(_web_root), html=True), name="web")

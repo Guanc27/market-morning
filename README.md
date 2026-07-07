@@ -1,6 +1,4 @@
-# Market Morning
-
-Native macOS app for AI-powered morning market briefs, portfolio analysis, and stock research.
+# Hosted SaaS standalone app — see docs/SUBSCRIPTIONS.md and scripts/run-saas.sh
 
 A menu bar sun icon opens a floating panel with your equity snapshot, sector brief, top picks, market explore, and quant portfolio analytics. A local Python backend on `127.0.0.1:8742` handles market data, Robinhood sync, and Claude summaries.
 
@@ -18,6 +16,27 @@ Inspired by **Minna Bank** (minimal, high contrast) and **Sumeria** (soft grain,
 | **Portfolio** | Live quant analysis from synced Robinhood holdings — technicals, fundamentals, ranked actions |
 
 Holdings sync from Robinhood via MCP when configured. Portfolio analysis runs on demand and caches locally.
+
+## Hosted SaaS (standalone web app)
+
+Market Morning can run as a **subscription-hosted web app** with tiered access (portfolio AI + picks = premium). See [docs/SUBSCRIPTIONS.md](docs/SUBSCRIPTIONS.md) for pricing rationale vs Claude Pro / DIY API.
+
+```bash
+# Set ANTHROPIC_API_KEY in backend/.env (platform key — you pay inference)
+export SAAS_MODE=1
+./scripts/run-saas.sh
+# Open http://localhost:8742/app
+```
+
+Docker: `docker compose up --build`
+
+| Tier | Price | Highlights |
+|------|-------|------------|
+| **Reader** | Free | Daily brief (shared), holdings view, picks preview |
+| **Investor** | $22/mo | Daily picks, 4× portfolio AI/mo, Robinhood sync |
+| **Active Trader** | $49/mo | Daily portfolio AI, unlimited explore |
+
+Mac app local mode (`SAAS_MODE=0`) is unchanged — users bring their own Anthropic key.
 
 ## Quick start
 

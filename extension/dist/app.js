@@ -1,4 +1,4 @@
-const API = "http://127.0.0.1:8742";
+const API = window.MM_API || "http://127.0.0.1:8742";
 const PORTFOLIO_CACHE_KEY = "mm_portfolio_cache";
 const BRIEF_CACHE_KEY = "mm_brief_cache";
 const PICKS_CACHE_KEY = "mm_picks_cache";

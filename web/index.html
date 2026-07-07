@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Market Morning</title>
+  <link rel="icon" href="/app/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/app/styles.css" />
+</head>
+<body>
+  <header class="topbar" id="topbar">
+    <div class="brand">
+      <img src="/app/favicon.svg" alt="" width="28" height="28" />
+      <span>Market Morning</span>
+    </div>
+    <nav class="topnav">
+      <a href="#app" data-view="app">App</a>
+      <a href="#pricing" data-view="pricing">Pricing</a>
+      <a href="#account" data-view="account" id="nav-account">Account</a>
+    </nav>
+    <div class="auth-zone" id="auth-zone">
+      <button type="button" class="btn ghost" id="btn-login">Log in</button>
+      <button type="button" class="btn primary" id="btn-signup">Sign up free</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="view-pricing" class="view hidden">
+      <div class="hero">
+        <h1>Cheaper than rebuilding this in Claude</h1>
+        <p class="lede">
+          One subscription replaces daily Opus briefs, Sonnet picks, quant portfolio analytics,
+          live market data, and Robinhood sync — without writing prompts or paying per token.
+        </p>
+      </div>
+      <div class="compare-banner">
+        <div><strong>Claude Pro ($20/mo)</strong> — chat limits, no structured brief, no picks pipeline, no portfolio quant.</div>
+        <div><strong>DIY API</strong> — power users spend ~$25–45/mo on inference alone for this workflow.</div>
+      </div>
+      <div class="tier-grid" id="tier-grid"></div>
+      <p class="fine-print">Prices in USD. Cancel anytime via billing portal. See <a href="/docs/SUBSCRIPTIONS.md">tier details</a>.</p>
+    </section>
+
+    <section id="view-account" class="view hidden">
+      <h2>Your account</h2>
+      <div id="account-panel" class="card"></div>
+    </section>
+
+    <section id="view-app" class="view">
+      <div id="tier-banner" class="tier-banner hidden"></div>
+      <iframe id="mm-frame" title="Market Morning" src="/app/shell.html" class="app-frame"></iframe>
+    </section>
+  </main>
+
+  <dialog id="auth-dialog">
+    <form method="dialog" id="auth-form">
+      <h3 id="auth-title">Log in</h3>
+      <label>Email <input type="email" name="email" required autocomplete="email" /></label>
+      <label>Password <input type="password" name="password" required minlength="8" autocomplete="current-password" /></label>
+      <label id="name-field" class="hidden">Display name <input type="text" name="display_name" autocomplete="name" /></label>
+      <p class="error" id="auth-error"></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn ghost" id="auth-cancel">Cancel</button>
+        <button type="submit" class="btn primary" id="auth-submit">Continue</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/app/saas.js" type="module"></script>
+</body>
+</html>

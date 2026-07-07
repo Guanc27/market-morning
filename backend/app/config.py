@@ -11,6 +11,21 @@ class Settings(BaseSettings):
     backend_host: str = "127.0.0.1"
     backend_port: int = 8742
     database_path: str = "./data/market_morning.db"
+    # SaaS mode: hosted standalone app with auth + subscriptions (Mac app keeps saas_mode=false)
+    saas_mode: bool = False
+    jwt_secret: str = ""
+    jwt_expire_days: int = 30
+    auth_password_salt: str = "market-morning-dev-salt-change-in-production"
+    session_cookie_name: str = "mm_session"
+    web_app_url: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    # Stripe (test mode price IDs from Dashboard)
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_pro_monthly: str = ""
+    stripe_price_pro_yearly: str = ""
+    stripe_price_desk_monthly: str = ""
+    stripe_price_desk_yearly: str = ""
     anthropic_model: str = "claude-opus-4-8"
     # Faster/cheaper model for picks, portfolio, synopsis, explore
     anthropic_model_fast: str = "claude-sonnet-5"
