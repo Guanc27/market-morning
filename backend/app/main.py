@@ -1,25 +1,40 @@
 from __future__ import annotations
 
+import asyncio
+import subprocess
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from app.account import load_account
 from app.ai import AIService
-from app.ai_jobs import BRIEF_AI_JOB, EXPLORE_JOB, PICKS_JOB, PORTFOLIO_JOB, clear_stale_job_if_needed, start_async_job
+from app.ai_jobs import (
+    BRIEF_AI_JOB,
+    EXPLORE_JOB,
+    PICKS_JOB,
+    PORTFOLIO_JOB,
+    clear_stale_job_if_needed,
+    snapshot_job,
+    start_async_job,
+    update_job,
+)
 from app.ai_sanitize import sanitize_ai_output
+from app.review_gate import normalize_brief_title
 from app.config import settings
 from app.db import Database
 from app.finance import finance_warm_status, get_quotes, warm_finance_cache
 from app.landing import get_explore_landing
 from app.logos import fetch_logo_bytes, logo_urls
 from app.mock_data import MOCK_HOLDINGS
+from app.portfolio_quant import reconcile_equity
 from app.research import get_research_progress, start_research_background
 from app.robinhood_sync import sync_robinhood
 from app.symbols import ensure_index, search_symbols, warm_index, warm_status
@@ -71,15 +86,80 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Market Morning API", version="0.1.0", lifespan=lifespan)
+APP_VERSION = "0.1.0"
+app = FastAPI(title="Market Morning API", version=APP_VERSION, lifespan=lifespan)
+
+# --- Local-only access hardening (CSRF / DNS-rebinding) ----------------------
+# The backend binds to loopback and is consumed by the local file:// WebView.
+# The WebView issues requests with an Origin of `null` (or none at all), while
+# a browser page on a real site attacking localhost would carry its own site
+# Origin. We therefore:
+#   1. echo CORS headers ONLY for local/null origins (no wildcard, no creds), and
+#   2. reject any request carrying a real cross-site Origin, plus any request
+#      whose Host header is not loopback (closes the DNS-rebinding vector).
+_LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+_ALLOWED_ORIGINS = ["null", "http://localhost", "http://127.0.0.1"]
+_ALLOWED_ORIGIN_REGEX = r"^(null|https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?)$"
+
+
+def _hostname_is_local(netloc: str) -> bool:
+    """True when a Host/Origin authority points at loopback (port-agnostic)."""
+    if not netloc:
+        return False
+    authority = netloc.rsplit("@", 1)[-1]
+    if authority.startswith("["):  # bracketed IPv6, e.g. [::1]:8742
+        host = authority[1: authority.find("]")] if "]" in authority else authority[1:]
+    else:
+        host = authority.rsplit(":", 1)[0] if ":" in authority else authority
+    return host.lower() in _LOCAL_HOSTNAMES
+
+
+def _origin_is_allowed(origin: str) -> bool:
+    if origin.lower() == "null":
+        return True
+    parsed = urlparse(origin)
+    return _hostname_is_local(parsed.netloc)
+
+
+@app.middleware("http")
+async def _local_only_guard(request: Request, call_next):
+    origin = request.headers.get("origin")
+    # A real cross-site Origin (a page on another host driving the browser) is
+    # rejected outright — this is the localhost-CSRF / rebinding vector, esp. for
+    # the destructive POST /portfolio/sync. Missing/null Origin = local WebView.
+    if origin and not _origin_is_allowed(origin):
+        return JSONResponse(status_code=403, content={"detail": "Cross-origin request rejected"})
+    # DNS-rebinding: an attacker-controlled hostname resolving to 127.0.0.1 still
+    # arrives with its own Host header — require loopback.
+    host = request.headers.get("host")
+    if host and not _hostname_is_local(host):
+        return JSONResponse(status_code=403, content={"detail": "Non-local Host rejected"})
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_origin_regex=_ALLOWED_ORIGIN_REGEX,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+@lru_cache(maxsize=1)
+def _build_stamp() -> dict[str, Any]:
+    """Git SHA + build time so a stale launchd process is detectable at /health."""
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    sha = "unknown"
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(repo_root), stderr=subprocess.DEVNULL, timeout=2,
+        ).decode().strip() or "unknown"
+    except Exception:
+        sha = "unknown"
+    return {"git_sha": sha, "started_at": datetime.now(timezone.utc).isoformat()}
 
 
 class HoldingIn(BaseModel):
@@ -114,8 +194,12 @@ class SyncHoldingsIn(BaseModel):
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    stamp = _build_stamp()
     return {
         "status": "ok",
+        "version": APP_VERSION,
+        "git_sha": stamp["git_sha"],
+        "started_at": stamp["started_at"],
         "mock_mode": settings.mock_mode,
         "anthropic_configured": bool(settings.anthropic_api_key) or settings.mock_mode,
         "fmp_configured": bool(settings.fmp_api_key),
@@ -133,42 +217,49 @@ async def _invalidate_portfolio_analysis() -> None:
 async def get_portfolio() -> dict[str, Any]:
     holdings = await db.get_holdings()
     tickers = [h["ticker"] for h in holdings]
-    quotes = get_quotes(tickers)
-    logos = logo_urls(tickers)
+    quotes, logos, account = await asyncio.gather(
+        asyncio.to_thread(get_quotes, tickers),
+        asyncio.to_thread(logo_urls, tickers),
+        asyncio.to_thread(load_account),
+    )
     enriched = []
     total_value = 0.0
     total_cost = 0.0
     for h in holdings:
         q = quotes.get(h["ticker"], {})
-        price = q.get("price") or 0
-        value = price * h["shares"]
+        raw_price = q.get("price")
+        # A missing/zero/unavailable live quote must NEVER be coerced to 0 —
+        # that fabricates value=0 and a bogus -100% return. Leave those fields
+        # null (stale) so the client can render "—" instead of a fake loss.
+        price_known = isinstance(raw_price, (int, float)) and raw_price > 0
+        price = float(raw_price) if price_known else None
         cost = h["avg_cost"] * h["shares"]
-        total_value += value
         total_cost += cost
+        if price_known:
+            value = price * h["shares"]
+            total_value += value
+            value_out = round(value, 2)
+            return_pct = round((price - h["avg_cost"]) / h["avg_cost"] * 100, 2) if h["avg_cost"] else None
+        else:
+            value_out = None
+            return_pct = None
         enriched.append({
             **h,
             "name": q.get("name"),
             "logo_url": logos.get(h["ticker"]),
             "price": price,
             "change_pct": q.get("change_pct"),
-            "value": round(value, 2),
-            "return_pct": round((price - h["avg_cost"]) / h["avg_cost"] * 100, 2) if h["avg_cost"] else 0,
+            "value": value_out,
+            "return_pct": return_pct,
+            "stale": not price_known,
         })
     enriched.sort(key=lambda x: x.get("value") or 0, reverse=True)
-    account = load_account()
-    # Live quotes can be unavailable for illiquid or unrecognized tickers, which
-    # silently zeroes those positions (price defaults to 0) and badly understates
-    # both equity and the return %. When any quote is missing, prefer the broker
-    # snapshot's authoritative equity_value, which reconciles as
-    # equity + cash == total account. When every quote is present the recomputed
-    # total is used unchanged (fresher than the snapshot).
+    # Live quotes can be unavailable for illiquid or unrecognized tickers. Equity
+    # reconciliation (snapshot fallback when any quote is stale) is centralized in
+    # reconcile_equity() so the priced-value/stale/snapshot logic lives in one place.
+    rec = reconcile_equity(enriched, account)
     snapshot_equity = account.get("equity_value")
-    quotes_complete = bool(holdings) and all(
-        quotes.get(h["ticker"], {}).get("price") for h in holdings
-    )
-    equity_value = total_value
-    if not quotes_complete and snapshot_equity:
-        equity_value = float(snapshot_equity)
+    equity_value = rec["total_value"]
     return_pct = round((equity_value - total_cost) / total_cost * 100, 2) if total_cost else 0
     return {
         "holdings": enriched,
@@ -230,10 +321,9 @@ async def delete_holding(ticker: str) -> dict[str, bool]:
 
 @app.get("/portfolio/analysis")
 async def portfolio_analysis(force: bool = False) -> dict[str, Any]:
-    result = await ai.portfolio_analysis(force=force)
-    if result.get("content"):
-        result["content"] = sanitize_ai_output(result["content"])
-    return result
+    # Content is finalized/sanitized ONCE at generation and stored clean; serve
+    # the stored artifact verbatim (no per-read scrub).
+    return await ai.portfolio_analysis(force=force)
 
 
 @app.post("/portfolio/analysis/start")
@@ -242,8 +332,8 @@ async def portfolio_analysis_start(force: bool = False) -> dict[str, Any]:
         cached = await ai.portfolio_analysis(force=False)
         content = (cached.get("content") or "").strip()
         if content and not content.startswith("**Setup required:**") and not content.startswith("**API key rejected:**"):
-            cached["content"] = sanitize_ai_output(cached["content"])
-            PORTFOLIO_JOB.update(
+            update_job(
+                PORTFOLIO_JOB,
                 running=False,
                 done=True,
                 progress=100,
@@ -262,19 +352,16 @@ async def portfolio_analysis_start(force: bool = False) -> dict[str, Any]:
 @app.get("/portfolio/analysis/progress")
 async def portfolio_analysis_progress() -> dict[str, Any]:
     clear_stale_job_if_needed(PORTFOLIO_JOB)
-    job = dict(PORTFOLIO_JOB)
-    if job.get("result") and isinstance(job["result"], dict) and job["result"].get("content"):
-        job["result"] = {**job["result"], "content": sanitize_ai_output(job["result"]["content"])}
-    return job
+    return snapshot_job(PORTFOLIO_JOB)
 
 
 @app.get("/brief/recap")
 async def brief_recap() -> dict[str, Any]:
     landing = await db.get_brief_landing()
     if landing.get("today"):
-        landing["today"]["content"] = sanitize_ai_output(landing["today"]["content"])
-        if landing["today"].get("mini_brief"):
-            landing["today"]["mini_brief"] = sanitize_ai_output(landing["today"]["mini_brief"])
+        # Stored content is already finalized/sanitized; only the date-dependent
+        # canonical H1 is (re)applied on read.
+        landing["today"]["content"] = normalize_brief_title(landing["today"]["content"])
     return landing
 
 
@@ -285,18 +372,17 @@ async def brief_landing() -> dict[str, Any]:
 
 @app.post("/brief/mini")
 async def mini_brief() -> dict[str, Any]:
-    result = await ai.mini_brief()
-    result["content"] = sanitize_ai_output(result.get("content", ""))
-    return result
+    return await ai.mini_brief()
 
 
 @app.post("/brief/start")
 async def brief_start(force: bool = False) -> dict[str, Any]:
     if not force:
         row = await db.get_brief_for_today_full()
-        content = sanitize_ai_output((row or {}).get("content") or "")
+        content = normalize_brief_title((row or {}).get("content") or "")
         if content.strip() and not content.startswith("**Setup required:**") and not content.startswith("**API key rejected:**"):
-            BRIEF_AI_JOB.update(
+            update_job(
+                BRIEF_AI_JOB,
                 running=False,
                 done=True,
                 progress=100,
@@ -315,7 +401,7 @@ async def picks_today() -> dict[str, Any]:
     row = await db.get_picks_by_date(today)
     if not row:
         return {"content": "", "cached": False}
-    content = sanitize_ai_output(row.get("content") or "")
+    content = row.get("content") or ""
     meta = row.get("meta") or {}
     return {"content": content, "cached": bool(content.strip()), "meta": meta}
 
@@ -325,10 +411,11 @@ async def picks_start(force: bool = False) -> dict[str, Any]:
     today = datetime.now(timezone.utc).date().isoformat()
     if not force:
         row = await db.get_picks_by_date(today)
-        content = sanitize_ai_output((row or {}).get("content") or "")
+        content = (row or {}).get("content") or ""
         if content.strip() and not content.startswith("**Setup required:**") and not content.startswith("**API key rejected:**"):
             result = {"content": content, "meta": (row or {}).get("meta") or {}}
-            PICKS_JOB.update(
+            update_job(
+                PICKS_JOB,
                 running=False,
                 done=True,
                 progress=100,
@@ -344,25 +431,12 @@ async def picks_start(force: bool = False) -> dict[str, Any]:
 @app.get("/picks/progress")
 async def picks_progress() -> dict[str, Any]:
     clear_stale_job_if_needed(PICKS_JOB)
-    job = dict(PICKS_JOB)
-    if job.get("result") and isinstance(job["result"], dict) and job["result"].get("content"):
-        job["result"] = {
-            **job["result"],
-            "content": sanitize_ai_output(job["result"]["content"]),
-        }
-    return job
+    return snapshot_job(PICKS_JOB)
 
 
 @app.get("/picks/landing")
 async def picks_landing() -> dict[str, Any]:
     preview = await db.get_yesterday_picks_preview()
-    if preview:
-        if preview.get("synopsis"):
-            preview["synopsis"] = sanitize_ai_output(preview["synopsis"])
-        if preview.get("preview"):
-            preview["preview"] = sanitize_ai_output(preview["preview"])
-        if preview.get("content"):
-            preview["content"] = sanitize_ai_output(preview["content"])
     return {"yesterday": preview}
 
 
@@ -381,13 +455,20 @@ async def brief_archive_day(brief_date: str) -> dict[str, Any]:
     row = await db.get_brief_by_date(brief_date)
     if not row:
         raise HTTPException(404, "Brief not found")
-    row["content"] = sanitize_ai_output(row["content"])
+    # Canonicalize the archived H1 to "Morning Market Brief — <its own date>".
+    try:
+        date_display = datetime.strptime(brief_date, "%Y-%m-%d").strftime("%B %-d, %Y")
+    except ValueError:
+        date_display = None
+    # Stored brief is already finalized/sanitized; only re-stamp the canonical H1
+    # with this archived brief's own date (the genuinely date-dependent step).
+    row["content"] = normalize_brief_title(row["content"], date_display)
     return row
 
 
 @app.get("/logo/{ticker}")
 async def get_logo(ticker: str) -> Response:
-    result = fetch_logo_bytes(ticker)
+    result = await asyncio.to_thread(fetch_logo_bytes, ticker)
     if not result:
         raise HTTPException(404, "Logo not found")
     data, media = result
@@ -421,7 +502,7 @@ async def research_start(force: bool = False) -> dict[str, Any]:
 
 @app.get("/symbols/search")
 async def symbols_search(q: str = "", limit: int = 10, lite: bool = True) -> dict[str, Any]:
-    results = search_symbols(q, limit=min(limit, 15), lite=lite)
+    results = await asyncio.to_thread(search_symbols, q, min(limit, 15), lite)
     return {"results": results}
 
 
@@ -433,11 +514,12 @@ async def symbols_warm_status() -> dict[str, Any]:
 @app.get("/brief/compose-progress")
 async def brief_compose_progress() -> dict[str, Any]:
     clear_stale_job_if_needed(BRIEF_AI_JOB)
-    job = dict(BRIEF_AI_JOB)
+    job = snapshot_job(BRIEF_AI_JOB)
     if job.get("result") and isinstance(job["result"], dict) and job["result"].get("content"):
+        # Stored/generated brief is already clean; only re-apply the canonical H1.
         job["result"] = {
             **job["result"],
-            "content": sanitize_ai_output(job["result"]["content"]),
+            "content": normalize_brief_title(job["result"]["content"]),
         }
     return job
 
@@ -446,24 +528,18 @@ async def brief_compose_progress() -> dict[str, Any]:
 async def morning_brief(force: bool = False) -> dict[str, Any]:
     result = await ai.morning_brief(force=force)
     if isinstance(result, dict) and result.get("content"):
-        result["content"] = sanitize_ai_output(result["content"])
+        result["content"] = normalize_brief_title(result["content"])
     return result
 
 
 @app.get("/brief/top-picks")
 async def top_picks() -> dict[str, Any]:
-    result = await ai.top_picks()
-    if isinstance(result, dict) and result.get("content"):
-        result["content"] = sanitize_ai_output(result["content"])
-    return result
+    return await ai.top_picks()
 
 
 @app.post("/brief/explore")
 async def explore_market(body: ExploreIn) -> dict[str, Any]:
-    result = await ai.explore_market(body.market)
-    if isinstance(result, dict) and result.get("content"):
-        result["content"] = sanitize_ai_output(result["content"])
-    return result
+    return await ai.explore_market(body.market)
 
 
 @app.post("/explore/start")
@@ -478,21 +554,17 @@ async def explore_start(body: ExploreIn) -> dict[str, Any]:
 @app.get("/explore/progress")
 async def explore_progress() -> dict[str, Any]:
     clear_stale_job_if_needed(EXPLORE_JOB)
-    job = dict(EXPLORE_JOB)
-    if job.get("result") and isinstance(job["result"], dict) and job["result"].get("content"):
-        job["result"] = {
-            **job["result"],
-            "content": sanitize_ai_output(job["result"]["content"]),
-        }
-    return job
+    return snapshot_job(EXPLORE_JOB)
 
 
 @app.get("/watchlist")
 async def get_watchlist() -> dict[str, Any]:
     items = await db.get_watchlist()
     tickers = [w["ticker"] for w in items]
-    quotes = get_quotes(tickers)
-    logos = logo_urls(tickers)
+    quotes, logos = await asyncio.gather(
+        asyncio.to_thread(get_quotes, tickers),
+        asyncio.to_thread(logo_urls, tickers),
+    )
     enriched = [{
         **w,
         "name": quotes.get(w["ticker"], {}).get("name"),

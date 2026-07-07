@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#f6f4ef"/>
+  <!-- Bull + rising chart merged into one form -->
+  <path d="M32 96 L32 64 L44 64 L44 52 L56 52 L56 40 L68 40 L68 48 L80 40 L92 32 L104 28 L104 96 Z" fill="#1a3c34" opacity="0.12"/>
+  <path d="M36 88 L48 72 L54 76 L64 60 L74 64 L86 48 L98 40 L104 44 L92 56 L82 60 L74 72 L64 76 L56 84 L48 80 L40 88 Z" fill="#1a3c34"/>
+  <path d="M98 40 L108 28 L104 38 Z" fill="#e8622a"/>
+  <circle cx="90" cy="50" r="2" fill="#f6f4ef"/>
+</svg>

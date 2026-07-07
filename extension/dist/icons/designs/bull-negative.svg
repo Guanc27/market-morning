@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#f6f4ef"/>
+  <!-- Negative space: bull cut from green circle -->
+  <circle cx="64" cy="66" r="40" fill="#1a3c34"/>
+  <path d="M64 38c-10 0-18 7-20 16-2 1-4 4-4 7 0 7 5 12 12 14 1 5 5 9 12 9s11-4 12-9c7-2 12-7 12-14 0-3-2-6-4-7-2-9-10-16-20-16z" fill="#f6f4ef"/>
+  <path d="M48 48c-2-3-6-3-8 0 2-1 5 0 6 1" fill="#1a3c34"/>
+  <path d="M80 48c2-3 6-3 8 0-2-1-5 0-6 1" fill="#1a3c34"/>
+  <ellipse cx="64" cy="62" rx="7" ry="5" fill="#1a3c34"/>
+</svg>

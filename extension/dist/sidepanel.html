@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' file:; style-src 'self' 'unsafe-inline' file: https://fonts.googleapis.com; font-src 'self' file: https://fonts.gstatic.com; img-src 'self' data: file: http://127.0.0.1:8742; connect-src 'self' http://127.0.0.1:8742; base-uri 'none'; object-src 'none'; frame-ancestors 'none'" />
+  <title>Market Morning</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;0,7..72,600;1,7..72,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css?v=0.1.50" />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <div>
+          <p class="brand-name">Market Morning</p>
+          <p class="brand-sub" id="brand-sub">Your portfolio, clarified · v0.1.50</p>
+        </div>
+      </div>
+      <span id="live-dot" class="live-dot" role="status" aria-label="Checking connection…" title="Connection status"></span>
+    </header>
+
+    <p id="sync-status" class="sync-status hidden" aria-live="polite"></p>
+
+    <section id="hero" class="hero hidden">
+      <p class="hero-label">Portfolio value</p>
+      <p id="total-value" class="hero-value">$0</p>
+      <p id="hero-cash" class="hero-cash hidden"></p>
+      <div class="hero-meta">
+        <span id="total-return" class="pill pill-neutral">0.00%</span>
+        <span id="position-count" class="hero-positions">0 positions</span>
+      </div>
+    </section>
+
+    <div id="backend-error" class="banner banner-error hidden">
+      Can't reach Market Morning right now. The app may still be starting — give it a moment and try again.
+    </div>
+
+    <main class="main">
+      <div id="panel-brief" class="panel" role="tabpanel" aria-labelledby="tab-brief">
+        <div id="brief-tabs" class="subtab-bar hidden" role="tablist" aria-label="Brief">
+          <button type="button" id="brief-subtab-today" class="subtab active" data-brief-sub="today" role="tab" aria-selected="true" aria-controls="content-brief">Today</button>
+          <button type="button" id="brief-subtab-archive" class="subtab" data-brief-sub="archive" role="tab" aria-selected="false" aria-controls="brief-archive-pane">Archive</button>
+        </div>
+        <p id="brief-basis" class="surface-basis hidden"><strong>News-driven ideas</strong> — market moves tied to sector catalysts, with sources.</p>
+        <div id="brief-archive-pane" class="hidden" role="tabpanel" aria-labelledby="brief-subtab-archive">
+          <div id="archive-date-list" class="archive-date-list" role="radiogroup" aria-label="Past brief dates"></div>
+          <article id="content-archive" class="prose hidden"></article>
+        </div>
+        <div id="brief-hydrate" class="brief-hydrate">
+          <p id="brief-hydrate-label" class="brief-hydrate-label">Pulling up today's brief…</p>
+          <div class="brief-hydrate-track"><div class="brief-hydrate-fill"></div></div>
+        </div>
+        <div id="empty-brief" class="empty-state hidden">
+          <p class="empty-title">Good morning</p>
+          <p id="empty-brief-desc" class="empty-desc">Your sector-by-sector morning read, ready when you are.</p>
+          <button type="button" id="btn-brief" class="btn btn-primary">Generate today's brief</button>
+        </div>
+        <div id="brief-recap" class="brief-recap"></div>
+        <button type="button" id="btn-mini-brief" class="mini-brief-cta hidden">
+          <span class="mini-brief-cta-title">Catch up on late-day news</span>
+          <span class="mini-brief-cta-desc">Generate a one-paragraph update on what moved since this morning</span>
+        </button>
+        <div id="mini-brief-hydrate" class="brief-hydrate hidden">
+          <p id="mini-brief-hydrate-label" class="brief-hydrate-label">Catching up on late-day news…</p>
+          <div class="brief-hydrate-track"><div class="brief-hydrate-fill"></div></div>
+        </div>
+        <article id="content-mini-brief" class="mini-brief-card hidden"></article>
+        <div id="loading" class="loading hidden">
+          <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+          <span id="loading-label">Putting together your morning brief…</span>
+        </div>
+        <div id="brief-meta" class="brief-meta hidden">
+          <p id="brief-updated" class="brief-updated"></p>
+          <button type="button" id="btn-refresh-brief" class="btn btn-refresh">Refresh brief</button>
+        </div>
+        <article id="content-brief" class="prose hidden"></article>
+      </div>
+
+      <div id="panel-picks" class="panel hidden" role="tabpanel" aria-labelledby="tab-picks">
+        <div class="subtab-bar" role="tablist" aria-label="Picks">
+          <button type="button" id="picks-tab-today" class="subtab active" data-picks-sub="today" role="tab" aria-selected="true" aria-controls="picks-today-pane">Today's Picks</button>
+          <button type="button" id="picks-tab-watch" class="subtab" data-picks-sub="watchlist" role="tab" aria-selected="false" aria-controls="picks-watch-pane">Watchlist</button>
+        </div>
+        <div id="picks-today-pane" role="tabpanel" aria-labelledby="picks-tab-today">
+          <div id="picks-hydrate" class="brief-hydrate hidden">
+            <p id="picks-hydrate-label" class="brief-hydrate-label">Loading today's picks…</p>
+            <div class="brief-hydrate-track"><div class="brief-hydrate-fill"></div></div>
+          </div>
+          <div id="picks-empty" class="empty-state hidden">
+            <p class="empty-title">Top picks</p>
+            <p id="picks-empty-desc" class="empty-desc">Fresh ideas outside your current holdings.</p>
+            <button type="button" id="btn-picks" class="btn btn-primary">See today's picks</button>
+          </div>
+          <button type="button" id="btn-refresh-picks" class="btn btn-refresh hidden">Refresh picks</button>
+          <article id="content-picks" class="prose hidden"></article>
+          <div id="picks-yesterday" class="picks-yesterday hidden">
+            <div id="picks-yesterday-body" class="landing-card"></div>
+            <button type="button" id="btn-picks-yesterday-more" class="btn btn-ghost btn-block hidden">See yesterday's full picks</button>
+          </div>
+          <div id="watchlist-adds" class="watchlist-adds hidden"></div>
+        </div>
+        <div id="picks-watch-pane" class="hidden" role="tabpanel" aria-labelledby="picks-tab-watch">
+          <p class="surface-basis"><strong>Your watchlist</strong> — names you're tracking, plus anything you add from “Worth watching”.</p>
+          <div class="symbol-search">
+            <input id="watch-search" class="field watch-input" placeholder="Search ticker, company, or industry…" autocomplete="off" spellcheck="false" />
+            <div id="watch-search-results" class="search-dropdown hidden"></div>
+          </div>
+          <ul id="watchlist-list" class="holdings-list watchlist-list"></ul>
+        </div>
+      </div>
+
+      <div id="panel-explore" class="panel hidden" role="tabpanel" aria-labelledby="tab-explore">
+        <div id="explore-tabs" class="subtab-bar" role="tablist" aria-label="Explore">
+          <button type="button" id="explore-subtab-main" class="subtab active" data-explore-sub="explore" role="tab" aria-selected="true" aria-controls="explore-main-pane">Explore</button>
+          <button type="button" id="explore-subtab-past" class="subtab" data-explore-sub="past" role="tab" aria-selected="false" aria-controls="explore-past-pane">Past analysis</button>
+        </div>
+        <div id="explore-main-pane" role="tabpanel" aria-labelledby="explore-subtab-main">
+          <div class="sheet sheet-explore">
+            <h2 class="sheet-title">Explore a market</h2>
+            <p class="sheet-desc">Sector deep-dives, key players, and how it ties to your holdings.</p>
+            <input id="explore-input" class="field" placeholder="Semiconductors, AI, energy…" />
+            <button type="button" id="btn-explore" class="btn btn-primary">Run analysis</button>
+          </div>
+          <div id="explore-quick-markets" class="explore-quick-markets"></div>
+          <div id="explore-headlines" class="explore-headlines landing-card hidden"></div>
+          <div id="explore-loading" class="loading hidden">
+            <div class="progress-track"><div id="explore-progress-fill" class="progress-fill"></div></div>
+            <span id="explore-loading-label">Researching that market…</span>
+          </div>
+          <article id="content-explore" class="prose hidden"></article>
+          <p id="explore-cache-badge" class="explore-cache-badge hidden"></p>
+        </div>
+        <div id="explore-past-pane" class="hidden" role="tabpanel" aria-labelledby="explore-subtab-past">
+          <p class="section-label">Saved explorations</p>
+          <div id="explore-past-list" class="explore-past-list"></div>
+          <p id="explore-past-empty" class="landing-muted">Nothing saved yet — run an analysis to build your history.</p>
+        </div>
+      </div>
+
+      <div id="panel-portfolio" class="panel hidden" role="tabpanel" aria-labelledby="tab-portfolio">
+        <div id="portfolio-empty" class="empty-state hidden">
+          <p id="portfolio-empty-title" class="empty-title">Portfolio</p>
+          <p id="portfolio-empty-desc" class="empty-desc">Connect Robinhood to pull in your positions, then run analysis.</p>
+          <button type="button" id="btn-sync-robinhood" class="btn btn-primary">Connect Robinhood</button>
+        </div>
+        <div id="portfolio-subtabs" class="subtab-bar hidden" role="tablist" aria-label="Portfolio">
+          <button type="button" id="portfolio-subtab-analysis" class="subtab active" data-portfolio-sub="analysis" role="tab" aria-selected="true" aria-controls="portfolio-analysis-pane">Analysis</button>
+          <button type="button" id="portfolio-subtab-actions" class="subtab" data-portfolio-sub="actions" role="tab" aria-selected="false" aria-controls="portfolio-actions-pane">Actions</button>
+        </div>
+        <div id="portfolio-analysis-pane" role="tabpanel" aria-labelledby="portfolio-subtab-analysis">
+          <div class="sheet sheet-compact" id="portfolio-sheet">
+            <h2 class="sheet-title">Portfolio analytics</h2>
+            <p class="sheet-desc">A deep dive on your holdings — technicals, fundamentals, and what to watch.</p>
+            <button id="btn-portfolio-analysis" class="btn btn-primary" type="button">Run analysis</button>
+            <button id="btn-refresh-portfolio-analysis" class="btn btn-refresh hidden" type="button">Refresh analysis</button>
+          </div>
+          <div id="portfolio-analysis-block" class="portfolio-analysis-block">
+            <div id="portfolio-loading" class="loading hidden">
+              <div class="progress-track"><div id="portfolio-progress-fill" class="progress-fill"></div></div>
+              <span id="portfolio-loading-label">Reviewing your portfolio…</span>
+            </div>
+            <article id="content-portfolio" class="prose hidden" aria-hidden="true"></article>
+          </div>
+          <div id="portfolio-holdings-wrap" class="portfolio-holdings-wrap hidden">
+            <div class="portfolio-holdings-header">
+              <p class="section-label">Holdings</p>
+              <button type="button" id="btn-refresh-holdings" class="btn btn-refresh">Refresh holdings</button>
+            </div>
+            <div class="table-wrap portfolio-holdings-table-wrap">
+              <table id="portfolio-holdings-table" class="portfolio-holdings-table">
+                <thead>
+                  <tr>
+                    <th>Ticker</th>
+                    <th>Shares</th>
+                    <th>Price</th>
+                    <th>Value</th>
+                    <th aria-sort="descending" title="Sorted by return, highest first">Return <span class="sort-caret" aria-hidden="true">▾</span></th>
+                  </tr>
+                </thead>
+                <tbody id="portfolio-holdings-body"></tbody>
+              </table>
+            </div>
+            <p id="portfolio-holdings-hint" class="portfolio-holdings-hint hidden">Run analysis, then tap a row to open the full write-up.</p>
+          </div>
+        </div>
+        <div id="portfolio-actions-pane" class="hidden" role="tabpanel" aria-labelledby="portfolio-subtab-actions">
+          <div id="actions-empty" class="empty-state">
+            <p class="empty-title">No actions yet</p>
+            <p class="empty-desc">Run analysis on the Analysis tab to see ranked actions for your holdings.</p>
+            <button type="button" id="btn-actions-run-analysis" class="btn btn-primary">Run analysis</button>
+          </div>
+          <div id="portfolio-actions" class="actions-panel hidden">
+            <p class="surface-basis"><strong>Data-driven actions for your book</strong> — ranked from price, fundamentals &amp; technicals, not news.</p>
+            <ol id="actions-list" class="actions-list"></ol>
+          </div>
+        </div>
+      </div>
+
+      <div id="error" class="banner banner-error hidden">
+        <span id="error-text"></span>
+        <button type="button" id="btn-error-retry" class="btn btn-ghost btn-sm hidden">Retry</button>
+      </div>
+      <div class="main-scroll-buffer" aria-hidden="true"></div>
+    </main>
+
+    <div id="holding-modal" class="holding-modal hidden" aria-hidden="true">
+      <div class="holding-modal-backdrop" data-close-holding-modal></div>
+      <div class="holding-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="holding-modal-title">
+        <button type="button" class="holding-modal-close" data-close-holding-modal aria-label="Close">×</button>
+        <header class="holding-modal-header">
+          <div id="holding-modal-avatar" class="holding-modal-avatar"></div>
+          <div>
+            <h2 id="holding-modal-title" class="holding-modal-ticker"></h2>
+            <p id="holding-modal-sub" class="holding-modal-sub"></p>
+          </div>
+        </header>
+        <article id="holding-modal-body" class="prose holding-modal-body"></article>
+      </div>
+    </div>
+
+    <nav class="tabbar" aria-label="Main" role="tablist">
+      <button type="button" data-tab="brief" class="tab active" role="tab" id="tab-brief" aria-selected="true" aria-controls="panel-brief">
+        <span class="tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span>
+        <span>Brief</span>
+      </button>
+      <button type="button" data-tab="picks" class="tab" role="tab" id="tab-picks" aria-selected="false" aria-controls="panel-picks">
+        <span class="tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"><path d="M12 3l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17.8 5.8 22.3l2.4-7.4L2 10.4h7.6z"/></svg></span>
+        <span>Picks</span>
+      </button>
+      <button type="button" data-tab="explore" class="tab" role="tab" id="tab-explore" aria-selected="false" aria-controls="panel-explore">
+        <span class="tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg></span>
+        <span>Explore</span>
+      </button>
+      <button type="button" data-tab="portfolio" class="tab" role="tab" id="tab-portfolio" aria-selected="false" aria-controls="panel-portfolio">
+        <span class="tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg></span>
+        <span>Portfolio</span>
+      </button>
+    </nav>
+  </div>
+  <div id="glossary-popover" class="glossary-popover hidden" role="tooltip"></div>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="app.js?v=0.1.50"></script>
+</body>
+</html>

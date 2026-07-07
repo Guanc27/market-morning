@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import re
 
+from app.review_gate import (
+    normalize_brief_title,
+    normalize_source_spacing,
+    scrub_generic_meta,
+)
+
 # Anthropic thinking block repr leaked when only thinking block returned or cached badly
 _THINKING_RE = re.compile(r"ThinkingBlock\([\s\S]*?\)\s*", re.MULTILINE)
 _THINKING_TAIL_RE = re.compile(r"ThinkingBlock\([\s\S]*$", re.MULTILINE)
@@ -74,10 +80,25 @@ def sanitize_ai_output(text: str) -> str:
         if idx >= 0:
             cleaned = cleaned[:idx]
     cleaned = _strip_production_meta(cleaned)
+    # Enforce PRODUCTION_RULE as an actual post-gen check for every generation:
+    # drop pipeline/meta-commentary + self-correction narration. Fence-safe, so
+    # the ``mm-meta`` JSON block is never touched (this runs inside _chat before
+    # meta is parsed out).
+    cleaned = scrub_generic_meta(cleaned)
     cleaned = _strip_holdings_overview_table(cleaned)
     cleaned = _strip_quant_actions_section(cleaned)
     cleaned = _strip_raw_html(cleaned)
     cleaned = _normalize_emphasis_markers(cleaned)
+    # Re-space glued **bold**, a glued prose colon, and N. list markers as the
+    # LAST step: _normalize_emphasis_markers collapses spaces adjacent to ``**``
+    # (fixing spaces INSIDE emphasis) but that also re-glues legit OUTSIDE
+    # boundaries, so the source-glue fixer must run after it. Fence-aware, so the
+    # ``mm-meta`` JSON block is never touched.
+    cleaned = normalize_source_spacing(cleaned)
+    # Canonicalize the brief H1 on EVERY read path (today, recap, archive). Only
+    # a brief-title-variant H1 is rewritten (picks/explore/portfolio H1s never
+    # contain "brief"), and the date already in the title is preserved.
+    cleaned = normalize_brief_title(cleaned)
     return cleaned.strip()
 
 

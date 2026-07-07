@@ -49,8 +49,27 @@ BRIEF_AI_JOB: dict[str, Any] = {
 }
 
 
+def update_job(job: dict[str, Any], **fields: Any) -> None:
+    """Thread-safe mutation of a job's fields (guarded by the shared lock)."""
+    with _lock:
+        job.update(**fields)
+
+
+def snapshot_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Thread-safe shallow copy of a job for read-only serialization."""
+    with _lock:
+        return dict(job)
+
+
+def _set_progress(job: dict[str, Any], progress: int, message: str) -> None:
+    with _lock:
+        job["progress"] = progress
+        job["message"] = message
+
+
 def reset_brief_ai_job() -> None:
-    BRIEF_AI_JOB.update(
+    update_job(
+        BRIEF_AI_JOB,
         running=True,
         done=False,
         progress=0,
@@ -61,7 +80,8 @@ def reset_brief_ai_job() -> None:
 
 
 def finish_brief_ai_job(message: str = "Brief ready", result: dict[str, Any] | None = None) -> None:
-    BRIEF_AI_JOB.update(
+    update_job(
+        BRIEF_AI_JOB,
         running=False,
         done=True,
         progress=100,
@@ -71,23 +91,19 @@ def finish_brief_ai_job(message: str = "Brief ready", result: dict[str, Any] | N
 
 
 def set_portfolio_progress(progress: int, message: str) -> None:
-    PORTFOLIO_JOB["progress"] = progress
-    PORTFOLIO_JOB["message"] = message
+    _set_progress(PORTFOLIO_JOB, progress, message)
 
 
 def set_brief_ai_progress(progress: int, message: str) -> None:
-    BRIEF_AI_JOB["progress"] = progress
-    BRIEF_AI_JOB["message"] = message
+    _set_progress(BRIEF_AI_JOB, progress, message)
 
 
 def set_picks_progress(progress: int, message: str) -> None:
-    PICKS_JOB["progress"] = progress
-    PICKS_JOB["message"] = message
+    _set_progress(PICKS_JOB, progress, message)
 
 
 def set_explore_progress(progress: int, message: str) -> None:
-    EXPLORE_JOB["progress"] = progress
-    EXPLORE_JOB["message"] = message
+    _set_progress(EXPLORE_JOB, progress, message)
 
 
 def _job_is_stale(job: dict[str, Any], max_seconds: float = 600.0) -> bool:
@@ -138,9 +154,9 @@ def start_async_job(
         asyncio.set_event_loop(loop)
         try:
             result = loop.run_until_complete(coro_factory())
-            job.update(running=False, done=True, progress=100, message="Complete", result=result)
+            update_job(job, running=False, done=True, progress=100, message="Complete", result=result)
         except Exception as e:
-            job.update(running=False, done=True, progress=100, message="Failed", error=str(e))
+            update_job(job, running=False, done=True, progress=100, message="Failed", error=str(e))
         finally:
             loop.close()
 

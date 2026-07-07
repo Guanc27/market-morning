@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#1a3c34"/>
+  <!-- Soft minimal front face  Stripe-like rounded shapes -->
+  <rect x="36" y="44" width="56" height="44" rx="22" fill="#f6f4ef"/>
+  <path d="M40 52 C36 44 32 42 28 46 C32 44 36 46 38 50" fill="#e8622a"/>
+  <path d="M88 52 C92 44 96 42 100 46 C96 44 92 46 90 50" fill="#e8622a"/>
+  <circle cx="52" cy="62" r="4" fill="#1a3c34"/>
+  <circle cx="76" cy="62" r="4" fill="#1a3c34"/>
+  <rect x="54" y="72" width="20" height="10" rx="5" fill="#2d5a4f"/>
+  <rect x="58" y="76" width="4" height="2" rx="1" fill="#1a3c34" opacity="0.3"/>
+  <rect x="66" y="76" width="4" height="2" rx="1" fill="#1a3c34" opacity="0.3"/>
+</svg>

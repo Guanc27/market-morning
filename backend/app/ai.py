@@ -2,12 +2,35 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import random
 import re
 import threading
+import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from anthropic import Anthropic
+
+logger = logging.getLogger("market_morning.ai")
+
+# Bounded exponential backoff + jitter for transient LLM failures (429 rate
+# limits, 529 overloaded, 5xx). Anthropic can transiently 429/overload; without
+# this a whole section silently dropped to out="".
+_RETRYABLE_MARKERS = (
+    "429", "529", "overloaded", "rate_limit", "rate limit",
+    "500", "502", "503", "504", "internal server error",
+    "service unavailable", "timeout", "timed out", "connection",
+)
+_MAX_CHAT_RETRIES = 4
+_BACKOFF_BASE_SECONDS = 1.5
+_BACKOFF_MAX_SECONDS = 20.0
+# Cap on concurrent LLM sub-calls in a fan-out so a burst can't trip rate limits.
+_FANOUT_MAX_WORKERS = 6
+
+
+def _is_retryable_llm_error(err_lower: str) -> bool:
+    return any(marker in err_lower for marker in _RETRYABLE_MARKERS)
 
 from app.ai_jobs import (
     set_brief_ai_progress,
@@ -27,7 +50,7 @@ from app.mock_data import (
     mock_top_picks,
 )
 from app.news import flatten_news, get_news_bundle
-from app.portfolio_quant import compute_portfolio_quant
+from app.portfolio_quant import compute_portfolio_quant, portfolio_concentration, reconcile_equity
 from app.research import get_market_research_bundle
 from app.prompts import (
     BRIEF_SECTION_SPECS,
@@ -42,18 +65,44 @@ from app.prompts import (
     explore_overview_task,
     explore_section_system,
     explore_system,
+    late_day_update_system,
     picks_detail_system,
     picks_rank_system,
     picks_system,
     portfolio_system,
+    review_repair_system,
 )
 from app.response_parser import parse_ai_response
+from app import review_gate
 from app.ticker_validation import validate_content_tickers, validate_meta_tickers
 
 DEFAULT_UNIVERSE = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
     "JPM", "V", "UNH", "XOM", "LLY", "AVGO", "MA", "COST",
     "HD", "PG", "JNJ", "ABBV", "CRM", "AMD", "NFLX", "ORCL",
+]
+
+# Genuine small/mid-cap universe for the small-cap picks screen. DEFAULT_UNIVERSE
+# is all mega-caps, so screening it with max_market_cap=15e9 returned an empty
+# pool and the model invented small-caps. These are real, liquid small/mid names
+# across sectors; the market-cap filter in screen_candidates still drops any that
+# have grown past the cap, so the pool stays a true small/mid set.
+SMALL_MID_CAP_UNIVERSE = [
+    # Software / internet
+    "PATH", "GTLB", "DOCN", "BOX", "ASAN", "APPN", "BRZE", "AI", "FROG", "PD",
+    "BILL", "FSLY", "YEXT", "DV", "SEMR",
+    # Semiconductors / hardware
+    "LSCC", "POWI", "SITM", "AMBA", "NVTS", "ALGM", "INDI", "CRUS", "RMBS", "FORM",
+    # Biotech / medtech
+    "KRYS", "CRNX", "ARWR", "RARE", "INSM", "ACLX", "IONS", "RXRX", "TGTX", "AXSM",
+    # Energy / clean energy
+    "AMPY", "CRGY", "VTLE", "GPOR", "TALO", "SHLS", "ARRY", "FLNC", "RUN", "STEM",
+    # Consumer / retail
+    "CROX", "WING", "CAVA", "SG", "YETI", "PLNT", "FIGS", "OLPX",
+    # Fintech
+    "UPST", "LMND", "MQ", "DAVE", "PSFE",
+    # Space / thematic / industrials
+    "RKLB", "ASTS", "LUNR", "RDW", "ACHR", "JOBY",
 ]
 
 # --- Output token caps per generation type -----------------------------------
@@ -71,8 +120,14 @@ MAX_TOKENS_PORTFOLIO = 8192
 # Per-call cap for the fan-out brief: each of the ~10 concurrent sub-calls emits
 # one section (~350-550 words) well under this, so no single call truncates.
 MAX_TOKENS_BRIEF_SECTION = 2000
-# Explore fan-out: one section per concurrent sub-call.
-MAX_TOKENS_EXPLORE_SECTION = 2000
+# Explore fan-out: one section per concurrent sub-call. Kept comfortably above
+# the ~350-550 word section length so a body never truncates mid-heading.
+MAX_TOKENS_EXPLORE_SECTION = 2400
+# The ideas sub-call emits the Actionable Ideas markdown AND the mm-meta JSON, so
+# it needs extra headroom — a too-tight cap truncated the JSON mid-string and
+# left an unclosed ```mm-meta fence in stored output.
+MAX_TOKENS_EXPLORE_IDEAS = 3200
+MAX_TOKENS_EXPLORE_OVERVIEW = 2000
 # Picks fan-out: a single ranking call (JSON) then one concurrent call per pick.
 MAX_TOKENS_PICKS_RANK = 1600
 MAX_TOKENS_PICKS_DETAIL = 1400
@@ -137,6 +192,129 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             return None
     return None
+
+
+# --- Held-ticker exclusion for picks ----------------------------------------
+# Dual-class / multi-listing families that must be treated as one holding so a
+# pick can't slip through as a share-class variant of a name already owned.
+_SHARE_CLASS_GROUPS: list[frozenset[str]] = [
+    frozenset({"GOOG", "GOOGL"}),
+    frozenset({"BRK-A", "BRK-B"}),
+    frozenset({"FOX", "FOXA"}),
+    frozenset({"NWS", "NWSA"}),
+    frozenset({"UA", "UAA"}),
+    frozenset({"LEN", "LEN-B"}),
+    frozenset({"HEI", "HEI-A"}),
+    frozenset({"PARA", "PARAA"}),
+]
+
+
+def _norm_ticker(ticker: Any) -> str:
+    """Canonical form for comparison: upper-case, trimmed, dots -> dashes."""
+    return str(ticker or "").strip().upper().replace(".", "-")
+
+
+def _expand_held(held: set[str] | list[str] | None) -> set[str]:
+    """Normalized held set expanded with known share-class siblings."""
+    norm = {_norm_ticker(t) for t in (held or []) if t}
+    expanded = set(norm)
+    for t in norm:
+        for group in _SHARE_CLASS_GROUPS:
+            if t in group:
+                expanded |= set(group)
+    return expanded
+
+
+def _is_held(ticker: Any, held_expanded: set[str]) -> bool:
+    return _norm_ticker(ticker) in held_expanded
+
+
+# A pick heading in either the fan-out format (`### 2. Name (TKR)`) or the
+# single-call fallback format (`**2. Name (TKR)**— body...`). Numbered marker at
+# the start of a line is the reliable signal; the ticker (if any) is a
+# parenthesized upper-case token.
+_PICK_START_RE = re.compile(r"^\s*(?:#{2,4}\s*)?(?:\*\*)?\s*(\d+)\.\s+\S")
+_SECTION_HEADER_RE = re.compile(r"^\s*(?:#{1,3}\s+\S|-{3,}\s*$)")
+_PAREN_TICKER_RE = re.compile(r"\(([A-Z][A-Z.\-]{0,5})\)")
+# A leading symbol form: "**1. AAPL — Apple Inc.**" / "1. AAPL: ..." / "### 1. AAPL - ...".
+_LEAD_TICKER_RE = re.compile(r"^\s*(?:#{2,4}\s*)?(?:\*\*)?\s*\d+\.\s*([A-Z][A-Z.\-]{0,5})\b(?=\s*[—–:\-])")
+_RANK_PREFIX_RE = re.compile(r"^(\s*(?:#{2,4}\s*)?(?:\*\*)?\s*)(\d+)(\.)")
+
+# Self-correction / "we-already-own-this" narration that must never reach the
+# user. Broad on purpose: covers the single-call fallback's freeform variants.
+_PICKS_META_PATTERNS = [
+    re.compile(r"\s*\*?\(\s*already (?:held|owned|a holding|in (?:the|your) (?:book|portfolio))[^)]*\)\*?", re.I),
+    re.compile(r"\s*[—–-]?\s*wait,?\s*(?:this is\s*)?already (?:held|owned|in (?:the|your) (?:book|portfolio))[^.\n]*\.?", re.I),
+    re.compile(r"\s*[—–-]?\s*already (?:held|owned|a holding|in (?:the|your) (?:book|portfolio))(?:,)?\s*(?:skip|omit)?[^.\n]*\.?", re.I),
+    re.compile(r"\s*[—–-]?\s*(?:which |that )?you already (?:hold|own)[^.\n]*\.?", re.I),
+    re.compile(r"\s*Substitut(?:e|ing):?[^.\n]*\.?", re.I),
+    re.compile(r"\s*Replacing[^.\n]*\.?", re.I),
+    re.compile(r"\s*(?:so I(?:'ll)?|let me|I'?ll)\s+(?:pivot|substitute|swap|replace)[^.\n]*\.?", re.I),
+]
+
+
+def _heading_held_ticker(line: str, held_expanded: set[str]) -> bool:
+    candidates = list(_PAREN_TICKER_RE.findall(line))
+    lead = _LEAD_TICKER_RE.match(line)
+    if lead:
+        candidates.append(lead.group(1))
+    return any(_is_held(t, held_expanded) for t in candidates)
+
+
+def _scrub_picks_meta(content: str, held_expanded: set[str]) -> str:
+    """Deterministic review pass over picks output.
+
+    1) Drop any pick block whose heading names an already-held ticker (works for
+       both the fan-out `###` format and the single-call `**N. …**` fallback).
+    2) Strip residual self-correction / "already held / Substitute:" narration.
+    3) Renumber the surviving picks per section so ranks stay contiguous.
+
+    Runs deterministically so it holds even when the LLM is unavailable.
+    """
+    if not content:
+        return content
+
+    # 1) Drop held-headed pick blocks. A block runs from its numbered heading
+    #    line until the next pick heading or section header.
+    lines = content.split("\n")
+    kept: list[str] = []
+    dropping = False
+    for line in lines:
+        is_pick_start = bool(_PICK_START_RE.match(line))
+        is_section = bool(_SECTION_HEADER_RE.match(line))
+        if is_pick_start:
+            dropping = _heading_held_ticker(line, held_expanded)
+            if dropping:
+                continue
+        elif is_section:
+            dropping = False
+        if dropping:
+            continue
+        kept.append(line)
+
+    cleaned = "\n".join(kept)
+
+    # 2) Strip residual meta-commentary clauses on surviving lines.
+    for pat in _PICKS_META_PATTERNS:
+        cleaned = pat.sub("", cleaned)
+
+    # 3) Renumber surviving picks within each section.
+    out: list[str] = []
+    rank = 0
+    for line in cleaned.split("\n"):
+        if _SECTION_HEADER_RE.match(line) and not _PICK_START_RE.match(line):
+            rank = 0
+            out.append(line)
+            continue
+        if _PICK_START_RE.match(line):
+            rank += 1
+            line = _RANK_PREFIX_RE.sub(lambda m, r=rank: f"{m.group(1)}{r}{m.group(3)}", line, count=1)
+        out.append(line)
+
+    result = "\n".join(out)
+    result = re.sub(r"[ \t]{2,}", " ", result)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
 
 
 def _metric_for(sources: list[dict[str, Any]], ticker: str) -> dict[str, Any]:
@@ -206,8 +384,40 @@ class AIService:
             )
         resolved_model = model or settings.anthropic_model
         system_arg: Any = self._system_blocks(system)
+        for attempt in range(_MAX_CHAT_RETRIES + 1):
+            try:
+                msg = self._create_message(resolved_model, max_tokens, system_arg, user)
+                break
+            except Exception as e:
+                err = str(e).lower()
+                if "authentication" in err or "401" in err or "api-key" in err:
+                    return (
+                        "**API key rejected.** Your `ANTHROPIC_API_KEY` in `backend/.env` is invalid. "
+                        "Update it and restart the backend."
+                    )
+                # Retry transient rate-limit/overload/5xx with exponential backoff
+                # + jitter before falling back to the friendly-error / raise paths.
+                if _is_retryable_llm_error(err) and attempt < _MAX_CHAT_RETRIES:
+                    delay = min(_BACKOFF_BASE_SECONDS * (2 ** attempt), _BACKOFF_MAX_SECONDS)
+                    delay += random.uniform(0, delay * 0.25)
+                    logger.warning(
+                        "LLM transient error (attempt %d/%d, model=%s): %s — retrying in %.1fs",
+                        attempt + 1, _MAX_CHAT_RETRIES, resolved_model, e, delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                if "not_found" in err or "404" in err or "model" in err:
+                    return (
+                        f"**Model unavailable.** `{resolved_model}` is retired or invalid. "
+                        "Set `ANTHROPIC_MODEL=claude-opus-4-8` and `ANTHROPIC_MODEL_FAST=claude-sonnet-5` in `backend/.env` and restart the backend."
+                    )
+                logger.error("LLM call failed (model=%s): %s", resolved_model, e)
+                raise
+        return sanitize_ai_output(self._extract_message_text(msg))
+
+    def _create_message(self, resolved_model: str, max_tokens: int, system_arg: Any, user: str) -> Any:
         try:
-            msg = self.client.messages.create(
+            return self.client.messages.create(
                 model=resolved_model,
                 max_tokens=max_tokens,
                 system=system_arg,
@@ -215,26 +425,12 @@ class AIService:
                 extra_body={"thinking": {"type": "disabled"}},
             )
         except TypeError:
-            msg = self.client.messages.create(
+            return self.client.messages.create(
                 model=resolved_model,
                 max_tokens=max_tokens,
                 system=system_arg,
                 messages=[{"role": "user", "content": user}],
             )
-        except Exception as e:
-            err = str(e).lower()
-            if "authentication" in err or "401" in err or "api-key" in err:
-                return (
-                    "**API key rejected.** Your `ANTHROPIC_API_KEY` in `backend/.env` is invalid. "
-                    "Update it and restart the backend."
-                )
-            if "not_found" in err or "404" in err or "model" in err:
-                return (
-                    f"**Model unavailable.** `{resolved_model}` is retired or invalid. "
-                    "Set `ANTHROPIC_MODEL=claude-opus-4-8` and `ANTHROPIC_MODEL_FAST=claude-sonnet-5` in `backend/.env` and restart the backend."
-                )
-            raise
-        return sanitize_ai_output(self._extract_message_text(msg))
 
     @staticmethod
     def _extract_message_text(msg: Any) -> str:
@@ -245,38 +441,90 @@ class AIService:
                 parts.append(block.text)
         return "\n".join(parts).strip()
 
+    def _repair_missing_sections(
+        self,
+        content: str,
+        missing: list[str],
+        *,
+        gen_type: str,
+    ) -> str:
+        """One cheap fast-model pass that writes ONLY the missing section(s).
+
+        Deterministic scrubbing handles every mechanical failure class; this is
+        the single, gated LLM repair used only when a required section is absent
+        (which the fan-out normally prevents). Appends the generated section(s)
+        to the existing body. Best-effort — a failed/empty repair leaves the
+        original content untouched."""
+        if not missing or not self.client:
+            return content
+        try:
+            out = self._chat(
+                review_repair_system(gen_type, missing),
+                json.dumps({"missing_sections": missing, "existing_markdown": content[:12000]}, default=str),
+                max_tokens=1800,
+                model=settings.anthropic_model_fast,
+            )
+        except Exception:
+            return content
+        addition = sanitize_ai_output(out or "")
+        if not addition or _is_placeholder_content(addition):
+            return content
+        return f"{content.rstrip()}\n\n{addition.strip()}".strip()
+
     async def _portfolio_context(self) -> dict[str, Any]:
         holdings = await self.db.get_holdings()
         tickers = [h["ticker"] for h in holdings]
         quotes = get_quotes(tickers) if tickers else {}
+        account = load_account()
         portfolio_rows = []
-        total_value = 0.0
         total_cost = 0.0
         for h in holdings:
             q = quotes.get(h["ticker"], {})
-            price = q.get("price") or 0
-            value = price * h["shares"]
+            raw_price = q.get("price")
+            # A missing/zero/unavailable live quote must NEVER be coerced to 0 —
+            # that fabricates value=0 and a bogus -100% per-name loss, which then
+            # understates equity and makes the analysis narrate a false wipeout.
+            # Leave price/value/return null (stale) so the model treats it as a
+            # quote-unavailable name rather than a total loss.
+            price_known = isinstance(raw_price, (int, float)) and raw_price > 0
             cost = h["avg_cost"] * h["shares"]
-            total_value += value
             total_cost += cost
-            ret = ((price - h["avg_cost"]) / h["avg_cost"] * 100) if h["avg_cost"] else 0
+            if price_known:
+                price = float(raw_price)
+                value = price * h["shares"]
+                value_out = round(value, 2)
+                ret = round((price - h["avg_cost"]) / h["avg_cost"] * 100, 2) if h["avg_cost"] else None
+            else:
+                price = None
+                value_out = None
+                ret = None
             portfolio_rows.append({
                 **h,
                 "price": price,
-                "value": round(value, 2),
-                "return_pct": round(ret, 2),
+                "value": value_out,
+                "return_pct": ret,
                 "name": q.get("name"),
                 "sector": q.get("sector"),
                 "industry": q.get("industry"),
+                "quote_unavailable": not price_known,
             })
+        # Equity reconciliation (snapshot fallback when any quote is stale) is
+        # centralized in reconcile_equity() — one implementation for every path.
+        rec = reconcile_equity(portfolio_rows, account)
+        equity_value = rec["total_value"]
+        reconciled = rec["source"] == "broker_snapshot"
         return {
             "portfolio": portfolio_rows,
             "totals": {
-                "value": round(total_value, 2),
+                "value": round(equity_value, 2),
                 "cost": round(total_cost, 2),
-                "return_pct": round((total_value - total_cost) / total_cost * 100, 2) if total_cost else 0,
+                "return_pct": round((equity_value - total_cost) / total_cost * 100, 2) if total_cost else 0,
+                "priced_value": rec["priced_value"],
+                "equity_source": rec["source"],
+                "quotes_complete": not rec["stale_tickers"],
             },
             "holdings_tickers": tickers,
+            "account": account,
         }
 
     async def _brief_context(self, *, force_research: bool = False) -> dict[str, Any]:
@@ -456,7 +704,7 @@ class AIService:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         completed = 0
         total = len(tasks)
-        with ThreadPoolExecutor(max_workers=min(10, total)) as pool:
+        with ThreadPoolExecutor(max_workers=min(_FANOUT_MAX_WORKERS, total)) as pool:
             futs = [pool.submit(_run_one, o, s, u, mt) for o, s, u, mt in tasks]
             for fut in as_completed(futs):
                 order, text = fut.result()
@@ -465,6 +713,19 @@ class AIService:
                 completed += 1
                 set_brief_ai_progress(min(88, 25 + int(completed / total * 60)),
                                       "Composing sections…")
+
+        dropped = [o for o, *_ in tasks if o not in results]
+        if dropped:
+            def _brief_label(o: int) -> str:
+                if o == 0:
+                    return "Overview"
+                if o == len(BRIEF_SECTION_SPECS) + 1:
+                    return "Closing Ideas"
+                return section_headings.get(o, f"section {o}")
+            logger.warning(
+                "brief fan-out dropped %d/%d section(s): %s",
+                len(dropped), total, ", ".join(_brief_label(o) for o in sorted(dropped)),
+            )
 
         # Require the overview + a majority of sectors to consider the fan-out good.
         sector_orders = [o for o in results if 1 <= o <= len(BRIEF_SECTION_SPECS)]
@@ -510,7 +771,7 @@ class AIService:
             content = sanitize_ai_output(assembled)
         else:
             # Fallback: single large call if the fan-out failed / returned too little.
-            system = brief_system()
+            system = brief_system(self._generation_date_display())
             user = f"Today's data:\n```json\n{json.dumps(context, default=str)}\n```"
             raw = self._chat(system, user, max_tokens=MAX_TOKENS_BRIEF, model=_brief_model())
             content = sanitize_ai_output(parse_ai_response(raw)["content"])
@@ -521,6 +782,19 @@ class AIService:
         holdings_t = [h["ticker"] for h in (context.get("portfolio") or [])]
         watch_t = [w["ticker"] for w in (context.get("watchlist") or [])]
         content, _corr = validate_content_tickers(content, holdings=holdings_t, watchlist=watch_t)
+        # Production-ready finalization gate: scrub pipeline/meta leakage + stray
+        # meta fences, then repair (once) if a required section is missing.
+        date_display = self._generation_date_display()
+        gate = review_gate.finalize(
+            content, gen_type="brief",
+            required_sections=["Market Trade Ideas", "Watchlist Mentions"],
+            brief_date_display=date_display,
+        )
+        content = gate["content"]
+        if gate["needs_repair"]:
+            content = self._repair_missing_sections(content, gate["missing_sections"], gen_type="brief")
+            content = review_gate.finalize(content, gen_type="brief", brief_date_display=date_display)["content"]
+        content = sanitize_ai_output(content)
         await self.db.save_brief(
             content,
             {"synopsis": markdown_plain_excerpt(content)},
@@ -538,11 +812,7 @@ class AIService:
         prior = (existing or {}).get("content") or ""
         context = await self._full_context(force_research=True, force_news=True)
         headlines = (context.get("news_flat") or [])[:20]
-        system = (
-            "Write ONE dense paragraph (4–6 sentences) capturing late-breaking market news since the morning brief. "
-            "Focus on new headlines only. Cite 1–2 markdown links [Headline](url) from the provided news context. "
-            "Prefer free-access and MarketWatch sources. No headers, no bullets, no ThinkingBlock."
-        )
+        system = late_day_update_system()
         user = json.dumps(
             {"morning_brief_excerpt": prior[:2000], "latest_headlines": headlines},
             default=str,
@@ -552,40 +822,42 @@ class AIService:
         await self.db.save_mini_brief(content)
         return {"content": content}
 
+    @staticmethod
+    def _run_async_background(coro_factory: Callable[[], Any]) -> None:
+        """Run an async coroutine to completion on a throwaway loop in a daemon
+        thread. One place for the off-response-path background pattern (synopsis
+        generation + persistence) instead of repeating new-event-loop plumbing."""
+        def _run() -> None:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(coro_factory())
+            finally:
+                loop.close()
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def _schedule_brief_synopsis(self, content: str) -> None:
         """Generate recap synopsis in background so the brief returns without a second API wait."""
         if _is_placeholder_content(content) or len(content) < 100:
             return
 
-        def _run() -> None:
-            synopsis = self._generate_synopsis(content)
-            if not synopsis:
-                return
-            loop = asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(self._save_brief_synopsis(synopsis))
-            finally:
-                loop.close()
+        async def _job() -> None:
+            synopsis = await asyncio.to_thread(self._generate_synopsis, content)
+            if synopsis:
+                await self._save_brief_synopsis(synopsis)
 
-        threading.Thread(target=_run, daemon=True).start()
+        self._run_async_background(_job)
 
     def _schedule_picks_synopsis(self, content: str, watchlist_adds: list[Any]) -> None:
         if _is_placeholder_content(content) or len(content) < 100:
             return
 
-        def _run() -> None:
-            synopsis = self._generate_synopsis(content)
-            if not synopsis:
-                return
-            loop = asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(
-                    self.db.save_picks(content, synopsis, {"watchlist_adds": watchlist_adds})
-                )
-            finally:
-                loop.close()
+        async def _job() -> None:
+            synopsis = await asyncio.to_thread(self._generate_synopsis, content)
+            if synopsis:
+                await self.db.save_picks(content, synopsis, {"watchlist_adds": watchlist_adds})
 
-        threading.Thread(target=_run, daemon=True).start()
+        self._run_async_background(_job)
 
     async def _save_brief_synopsis(self, synopsis: str) -> None:
         row = await self.db.get_brief_for_today_full()
@@ -661,7 +933,8 @@ class AIService:
         # Code-computed quant analytics (aggregates that reconcile, beta/residual/IR
         # vs sector ETF, correlation + effective bets, ATR stops, sector templates).
         context["quant"] = compute_portfolio_quant(
-            context["portfolio"], context.get("technicals"), context.get("market")
+            context["portfolio"], context.get("technicals"), context.get("market"),
+            account=context.get("account"),
         )
 
         set_portfolio_progress(70, "Running quant analysis…")
@@ -673,6 +946,17 @@ class AIService:
         content = sanitize_ai_output(result["content"])
         held_t = list(tickers)
         content, _c = validate_content_tickers(content, holdings=held_t)
+        # Production-ready finalization gate: scrub pipeline/meta leakage, drop
+        # false $0/-100%/wipeout/delisting narration, and reconcile any narrated
+        # portfolio total to the computed aggregate (never a false wipeout).
+        expected_equity = (context.get("quant", {}).get("aggregates", {}) or {}).get("total_value")
+        gate = review_gate.finalize(
+            content, gen_type="portfolio",
+            required_sections=["Portfolio Pulse"],
+            expected_equity=expected_equity,
+        )
+        content = gate["content"]
+        content = sanitize_ai_output(content)
         result = validate_meta_tickers(result, holdings=held_t)
         meta = {
             "actions": result.get("actions", []),
@@ -688,15 +972,20 @@ class AIService:
     async def portfolio_analysis_job(self, force: bool = False) -> dict[str, Any]:
         return await self.portfolio_analysis(force=force)
 
-    def _fanout_picks(self, context: dict[str, Any], held: set[str]) -> dict[str, Any] | None:
+    def _fanout_picks(self, context: dict[str, Any], held_expanded: set[str]) -> dict[str, Any] | None:
         """Rank once (single call), then write each pick concurrently, then stitch.
 
         The ranking call fixes the global head-to-head ordering and emits
         watchlist_adds; per-pick detail write-ups fan out under those fixed
         ranks. Returns a parsed result dict or None (caller falls back).
         """
-        candidates = context.get("candidates") or []
-        small_cap = context.get("small_cap_candidates") or []
+        # Held names are excluded from the candidate universe BEFORE ranking so
+        # the model can never rank a name the user already owns (case- and
+        # share-class-insensitive).
+        candidates = [c for c in (context.get("candidates") or [])
+                      if not _is_held(c.get("ticker"), held_expanded)]
+        small_cap = [c for c in (context.get("small_cap_candidates") or [])
+                     if not _is_held(c.get("ticker"), held_expanded)]
         news_flat = context.get("news_flat")
         research = context.get("sector_research") or {}
         metrics_picks = context.get("metrics_picks") or {}
@@ -710,7 +999,7 @@ class AIService:
             "headlines": headlines,
             "news": (news_flat or [])[:40],
             "metrics_picks": metrics_picks,
-            "held_tickers": sorted(held),
+            "held_tickers": sorted(held_expanded),
             "watchlist": watch,
         }
         try:
@@ -724,17 +1013,39 @@ class AIService:
 
         def _clean_picks(items: Any) -> list[dict[str, Any]]:
             out: list[dict[str, Any]] = []
+            seen: set[str] = set()
             for p in items or []:
                 if isinstance(p, dict) and p.get("ticker"):
-                    t = str(p["ticker"]).upper()
-                    if t in held:
+                    t = _norm_ticker(p["ticker"])
+                    if not t or t in seen or _is_held(t, held_expanded):
                         continue
+                    seen.add(t)
                     out.append({"ticker": t, "name": p.get("name") or t,
                                 "angle": p.get("angle") or "", "evidence": p.get("evidence") or ""})
             return out
 
+        def _refill(picks: list[dict[str, Any]], pool: list[dict[str, Any]],
+                    taken: set[str], want: int = 5) -> None:
+            """Top up a section from non-held screened candidates so a section
+            short on ranked names never forces the meta-commentary-prone
+            single-call fallback."""
+            for c in pool:
+                if len(picks) >= want:
+                    break
+                t = _norm_ticker(c.get("ticker"))
+                if not t or t in taken or _is_held(t, held_expanded):
+                    continue
+                taken.add(t)
+                picks.append({"ticker": t, "name": c.get("name") or t,
+                              "angle": "", "evidence": ""})
+
         large = _clean_picks(ranking.get("large_cap"))[:5]
         small = _clean_picks(ranking.get("small_cap"))[:5]
+        # Re-fill any slots vacated by dropped held names with fresh non-held
+        # screened candidates so the FINAL list is complete and held-free.
+        taken = {p["ticker"] for p in large} | {p["ticker"] for p in small}
+        _refill(large, candidates, taken)
+        _refill(small, small_cap, taken)
         if len(large) + len(small) < 6:
             return None
 
@@ -753,6 +1064,9 @@ class AIService:
                 "metrics": _metric_for([metrics_picks, metrics_held], ticker),
                 "headlines": headlines,
                 "news": (news_flat or [])[:25],
+                # Authoritative holdings membership so the persona never asserts
+                # from memory that a name is / isn't in the user's book.
+                "held_tickers": sorted(held_expanded),
             }
             try:
                 out = self._chat(picks_detail_system(), json.dumps(payload, default=str),
@@ -765,7 +1079,7 @@ class AIService:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         completed = 0
         total = len(detail_specs)
-        with ThreadPoolExecutor(max_workers=min(10, total)) as pool:
+        with ThreadPoolExecutor(max_workers=min(_FANOUT_MAX_WORKERS, total)) as pool:
             futs = [pool.submit(_run_detail, s, i, p) for s, i, p in detail_specs]
             for fut in as_completed(futs):
                 section, idx, text = fut.result()
@@ -773,6 +1087,14 @@ class AIService:
                     details[(section, idx)] = text
                 completed += 1
                 set_picks_progress(min(90, 55 + int(completed / total * 33)), "Writing picks…")
+
+        dropped_picks = [(s, i, p) for s, i, p in detail_specs if (s, i) not in details]
+        if dropped_picks:
+            logger.warning(
+                "picks fan-out dropped %d/%d pick detail(s): %s",
+                len(dropped_picks), total,
+                ", ".join(f"{s}:{p['ticker']}" for s, _i, p in dropped_picks),
+            )
 
         def _assemble(section: str, picks: list[dict[str, Any]]) -> list[str]:
             lines: list[str] = []
@@ -806,9 +1128,12 @@ class AIService:
             return mock_top_picks()
         holdings = await self.db.get_holdings()
         held = {h["ticker"] for h in holdings}
+        held_expanded = _expand_held(held)
         set_picks_progress(18, "Ranking opportunities…")
-        candidates = [c for c in screen_candidates(DEFAULT_UNIVERSE)[:20] if c["ticker"] not in held][:12]
-        small_cap = [c for c in screen_candidates(DEFAULT_UNIVERSE, max_market_cap=15e9)[:20] if c["ticker"] not in held][:8]
+        candidates = [c for c in screen_candidates(DEFAULT_UNIVERSE)[:20] if not _is_held(c["ticker"], held_expanded)][:12]
+        # Screen the genuine small/mid-cap universe (not the mega-cap DEFAULT set)
+        # so small-cap picks are really screened rather than fabricated.
+        small_cap = [c for c in screen_candidates(SMALL_MID_CAP_UNIVERSE, max_market_cap=15e9)[:20] if not _is_held(c["ticker"], held_expanded)][:8]
         pick_tickers = [c["ticker"] for c in candidates] + [c["ticker"] for c in small_cap]
         set_picks_progress(32, "Gathering market context…")
         held_tickers = [h["ticker"] for h in holdings]
@@ -817,6 +1142,11 @@ class AIService:
         context["candidates"] = candidates
         if small_cap:
             context["small_cap_candidates"] = small_cap
+        # Single source of truth for any portfolio-concentration figure picks
+        # narrates (so it never free-forms a wrong "$8,151 / 65%" number).
+        context["portfolio_concentration"] = portfolio_concentration(
+            context.get("portfolio") or [], context.get("account"),
+        )
         all_m = context.get("metrics") or {}
         held_set = set(held_tickers)
         pick_set = set(pick_tickers[:8])
@@ -841,7 +1171,7 @@ class AIService:
         context["metrics_picks"] = _slice(all_m, pick_set)
         set_picks_progress(55, "Ranking picks…")
         # Rank once (single call, head-to-head), then fan out per-pick detail.
-        assembled = await asyncio.to_thread(self._fanout_picks, context, held)
+        assembled = await asyncio.to_thread(self._fanout_picks, context, held_expanded)
         if assembled and assembled.get("content"):
             result = assembled
         else:
@@ -854,6 +1184,13 @@ class AIService:
         held_t = [h["ticker"] for h in holdings]
         watch_t = [w["ticker"] for w in (context.get("watchlist") or [])]
         content, _c = validate_content_tickers(content, holdings=held_t, watchlist=watch_t)
+        # Review pass: strip any self-correction / "already held / Substitute:"
+        # narration and drop any block that still heads a held ticker so the
+        # final output is clean, professional, and held-free.
+        content = _scrub_picks_meta(content, held_expanded)
+        # Repair any garbled/severed-number/unmatched-paren fragment that slipped
+        # through the fan-out stitch so this class can never reach the user.
+        content = review_gate.repair_garbled_fragments(content)
         result["content"] = content
         result = validate_meta_tickers(result, holdings=held_t, watchlist=watch_t)
         if content and not _is_placeholder_content(content):
@@ -902,7 +1239,7 @@ class AIService:
         # (order, heading|None, system, user, max_tokens, is_ideas)
         tasks: list[tuple[int, str | None, str, str, int, bool]] = []
         tasks.append((0, None, explore_section_system(query, explore_overview_task(query)),
-                      json.dumps(overview_payload, default=str), 1800, False))
+                      json.dumps(overview_payload, default=str), MAX_TOKENS_EXPLORE_OVERVIEW, False))
         section_headings: dict[int, str] = {}
         for i, (heading, key, guidance) in enumerate(EXPLORE_SECTION_SPECS, start=1):
             section_headings[i] = heading
@@ -911,7 +1248,7 @@ class AIService:
                           json.dumps(section_payloads[key], default=str),
                           MAX_TOKENS_EXPLORE_SECTION, False))
         tasks.append((IDEAS_ORDER, None, explore_ideas_system(query),
-                      json.dumps(ideas_payload, default=str), 2200, True))
+                      json.dumps(ideas_payload, default=str), MAX_TOKENS_EXPLORE_IDEAS, True))
 
         results: dict[int, str] = {}
         meta: dict[str, Any] = {"actions": [], "watchlist_adds": [], "positions": []}
@@ -924,14 +1261,24 @@ class AIService:
             except Exception:
                 return order, "", None
             if is_ideas:
+                # parse_ai_response only strips a CLOSED mm-meta fence; a
+                # truncated (unclosed / unparseable) fence would otherwise land
+                # raw in stored output, so scrub any stray/broken fence from the
+                # display body here (the parsed meta is returned separately).
                 parsed = parse_ai_response(out or "")
-                return order, parsed.get("content") or "", parsed
-            return order, sanitize_ai_output(out or ""), None
+                ideas_content = review_gate.strip_stray_meta_fences(parsed.get("content") or "")
+                return order, ideas_content, parsed
+            body = sanitize_ai_output(out or "")
+            # A section body that truncated mid-generation can end on an empty or
+            # cut-off heading (e.g. "### Cross-Compar"); drop it so no broken or
+            # empty heading is stitched into the deep-dive.
+            body = review_gate.strip_trailing_partial_heading(body)
+            return order, body, None
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
         completed = 0
         total = len(tasks)
-        with ThreadPoolExecutor(max_workers=min(8, total)) as pool:
+        with ThreadPoolExecutor(max_workers=min(_FANOUT_MAX_WORKERS, total)) as pool:
             futs = [pool.submit(_run_one, o, s, u, mt, ideas) for o, _, s, u, mt, ideas in tasks]
             for fut in as_completed(futs):
                 order, text, parsed = fut.result()
@@ -944,6 +1291,19 @@ class AIService:
                 set_explore_progress(min(88, 58 + int(completed / total * 28)),
                                      f"Analyzing {query}…")
 
+        dropped = [o for o, *_ in tasks if o not in results]
+        if dropped:
+            def _explore_label(o: int) -> str:
+                if o == 0:
+                    return "Overview"
+                if o == IDEAS_ORDER:
+                    return "Actionable Ideas"
+                return section_headings.get(o, f"section {o}")
+            logger.warning(
+                "explore fan-out (%s) dropped %d/%d section(s): %s",
+                query, len(dropped), total, ", ".join(_explore_label(o) for o in sorted(dropped)),
+            )
+
         # Require overview, the ideas/meta block, and a majority of body sections.
         body_orders = [o for o in results if 1 <= o <= len(EXPLORE_SECTION_SPECS)]
         if 0 not in results or IDEAS_ORDER not in results or len(body_orders) < 3:
@@ -954,7 +1314,14 @@ class AIService:
             text = results[o].strip()
             heading = section_headings.get(o)
             if heading:
-                text = re.sub(r"^\s*#{1,4}\s*.*\n?", "", text, count=1) if text.lstrip().startswith("#") else text
+                # Only strip a duplicated SECTION-level heading (# or ##) the
+                # model may have echoed — never a `### Name (TICKER)` sub-header,
+                # which previously dropped the FIRST player/metric entry's header
+                # and left its bullets orphaned under the ## section heading.
+                text = re.sub(r"^\s*#{1,2}\s+.*\n?", "", text, count=1) if text.lstrip().startswith("#") else text
+                text = review_gate.strip_trailing_partial_heading(text)
+                if not text.strip():
+                    continue
                 text = f"## {heading}\n\n{text.strip()}"
             parts.append(text.strip())
         content = "\n\n".join(parts).strip()
@@ -990,6 +1357,17 @@ class AIService:
         held_t = context.get("holdings_tickers") or []
         watch_t = [w["ticker"] for w in (context.get("watchlist") or [])]
         content, _c = validate_content_tickers(content, holdings=held_t, watchlist=watch_t)
+        # Production-ready finalization gate: scrub pipeline/meta leakage + stray
+        # meta fences, then repair (once) if the required ideas section is missing.
+        gate = review_gate.finalize(
+            content, gen_type="explore",
+            required_sections=["Actionable Ideas"],
+        )
+        content = gate["content"]
+        if gate["needs_repair"]:
+            content = self._repair_missing_sections(content, gate["missing_sections"], gen_type="explore")
+            content = review_gate.finalize(content, gen_type="explore")["content"]
+        content = sanitize_ai_output(content)
         result["content"] = content
         result = validate_meta_tickers(result, holdings=held_t, watchlist=watch_t)
         if content and not _is_placeholder_content(content):

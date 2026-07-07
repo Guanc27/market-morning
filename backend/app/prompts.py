@@ -1,23 +1,30 @@
 """System prompts for Market Morning AI analysis."""
 
 from app.prompts_persona import (
-    CIO_PERSONA,
+    BRIEF_PERSONA,
     CLARITY_RULE,
     EVIDENCE_RULE,
-    INTEGRATION_RULE,
+    EXPLORE_PERSONA,
+    LATE_DAY_PERSONA,
     META_BLOCK_INSTRUCTION,
+    PICKS_PERSONA,
     PORTFOLIO_META_INSTRUCTION,
     PRODUCTION_RULE,
+    QUANT_FOUNDATION,
     QUANT_PERSONA,
 )
 
 BRIEF_SECTIONS = """
 Write a ~10-minute read (2,500–3,500 words). US stocks/ETFs only. This is a MARKET brief — not a portfolio review (portfolio lives on its own tab).
 
-## Overnight & Pre-Market Context
-Opening narrative: indices, futures, macro tone. Linked news for every major claim.
+Start with exactly this H1 on its own line (real generation date, no other title variant): `# Morning Market Brief — {date_display}`
 
-For EACH section below, use articles from `sector_research.<sector_key>` in context (accredited press + niche newsletters). Follow `research_note` when today’s headlines are sparse.
+Quant tone: anchor every claim with a number (index/futures %, price levels, valuation multiples, growth/margin, yields, spreads) and frame each trade idea with an explicit trigger and what would invalidate it.
+
+## Overnight & Pre-Market Context
+Opening narrative: indices, futures, macro tone, rates, VIX/regime. Linked news for every major claim.
+
+Cover EVERY section below — none may be dropped: Information Technology, Financials, Consumer Cyclicals, Healthcare, Energy, Inference & LLM, Startup & Venture News, Geopolitical Trades. For EACH, use articles from `sector_research.<sector_key>` in context (accredited press + niche newsletters). Follow `research_note` when today’s headlines are sparse.
 
 For EACH section below, use this structure repeatedly:
 1. **News** — cite linked headline(s)
@@ -72,6 +79,8 @@ For EACH holding, write a subsection:
 #### TICKER
 Open with one line: shares, avg cost, price, value, day %, return % (from context). Then one paragraph on fundamentals + technicals (MA20, MA50, RSI, volatility, profitability ratios).
 
+QUOTE INTEGRITY (critical): A holding whose live quote did not resolve this sync is flagged with `quote_unavailable: true` in context (price/value/return are null, and its ticker appears in `quant.aggregates.quote_unavailable_tickers`). This is a transient feed gap, NOT a loss. For such a name, NEVER write "$0", "price $0", "value $0.00", "-100%", "wiped out", "100% loss", "data feed break", "reverse split", "delisting", or any wipeout/liquidation narrative. Instead, either use its broker snapshot value silently or add ONE neutral clause — "live quote unavailable this sync" — and move on to its fundamentals/technicals. Do not compute or imply a return for it. The account equity and total return you state come from `quant.aggregates` (which reconciles to the broker snapshot when any quote is stale) and MUST match `totals.value`/`totals.return_pct` — never a figure derived by summing only the resolved names.
+
 Then a blank line, then on its own line (with a space after the colon):
 Stop / Limit: recommended stop or limit price with quant rationale (e.g. "Stop $185 — 20-day MA at $182 declining, RSI 38, break implies ..."). Do not wrap labels in markdown asterisks — plain text only. Do not glue the label to the value (wrong: "Stop / Limit:Stop $185").
 
@@ -81,7 +90,7 @@ For each holding, use the pre-computed analytics in `quant.per_ticker[TICKER]`: 
 One paragraph on whether the book's risk is one factor or many: cite `quant.aggregates.effective_bets_by_factor` vs `position_count`, the dominant `sector_template_weights_pct`, `weighted_market_beta`, and the correlation clusters from `quant.correlation_matrix`. Be honest when names that look diversified by count collapse to a single factor.
 
 ### Portfolio-level metrics
-1–2 paragraphs: concentration (HHI), sector-template weights, correlation clusters, weighted beta, regime (`quant.regime`), cash deployment. Use ONLY the computed values in `quant.aggregates` and `totals` — the total equity you state MUST equal `quant.aggregates.total_value` and must reconcile to the sum of the listed positions. Never free-form a portfolio total.
+1–2 paragraphs: concentration (HHI), sector-template weights, correlation clusters, weighted beta, regime (`quant.regime`), cash deployment. Use ONLY the computed values in `quant.aggregates` and `totals` — the total equity you state MUST equal `quant.aggregates.total_value` and the total return MUST equal `quant.aggregates.return_pct`. When `quant.aggregates.quote_unavailable_tickers` is non-empty the equity comes from the broker snapshot (so it will exceed the sum of only the priced names — that is correct, not an error), so do NOT try to reconcile the total to the resolved positions or flag a discrepancy. Never free-form a portfolio total.
 
 Do NOT include a "## Quant Actions" section in the markdown body — quant actions belong only in mm-meta.
 
@@ -90,13 +99,24 @@ Portfolio analysis is per-holding only. Do not include news roundups, headline l
 When using uncommon metrics, wrap as `<term id="FCF">FCF</term>`. Never output ThinkingBlock, raw HTML tags, or internal reasoning — markdown report only.
 """
 
+# Authored once, composed into every picks system prompt (rank, per-pick
+# detail, and the single-call fallback). The picks persona reasons about the
+# user's "book", so it must treat the provided held-ticker set as the ONLY
+# source of truth for holdings membership — otherwise it asserts (from memory)
+# that a name is or isn't held, e.g. "dwarfs every name in your book except
+# AAPL" when AAPL is not actually held.
+PICKS_HELD_REFERENCE_RULE = """HOLDINGS-REFERENCE INTEGRITY: The authoritative set of tickers the user currently holds is provided in context (`held_tickers`, or `holdings_tickers` in the full payload). Treat that set as the ONLY source of truth for what is in the user's book. Only ever describe a name as held / owned / "in your book" if it appears in that set, and only describe a name as NOT held if it is absent from it. NEVER assert from memory that a specific ticker is or isn't in the user's portfolio (e.g. "dwarfs every name in your book except AAPL"). Do not compare a pick's size to specific named holdings or cite the user's book weight / concentration ("X% of the book") unless those exact figures are given in context — describe the standalone pick on its own merits instead."""
+
 PICKS_SECTIONS = """
+CONCENTRATION FIGURES: If you reference the user's existing portfolio concentration or sector weight, use ONLY the pre-computed values in `portfolio_concentration` (e.g. `semiconductor_cluster.value` / `.pct`, `by_sector_template`, `total_value`) and quote them exactly. NEVER compute, estimate, or free-form a portfolio dollar total or percentage yourself — if a figure is not in `portfolio_concentration`, describe the exposure qualitatively without a specific number.
+
 # Top 5 Large-Cap Picks
 
-Prioritize **alpha-driven insights**: non-obvious catalysts, mispriced risk/reward, variant views vs consensus, and specific data points from linked news — not generic bull cases.
+Prioritize **quant-driven alpha**: non-obvious catalysts, mispriced risk/reward, and variant views vs consensus — each grounded in concrete numbers (valuation multiples, growth/margin, key operating metrics) and specific data points from linked news, never a generic bull case.
 
 Rules:
-- Recommend ONLY tickers the user does NOT already hold.
+- Recommend ONLY tickers the user does NOT already hold. The candidate set has already been filtered to non-held names — every pick must be a fresh, non-held ticker.
+- NEVER pick a held name and then swap it. Do NOT write "already held", "already own", "skip", "wait", "Substitute:", "replacing", or any self-correction / selection narration. If a name you considered is already owned, silently choose a different candidate. The reader must never see how a pick was chosen or reconsidered.
 - Market cap generally > $10B for this section.
 - For each: rank, ticker, name, niche alpha thesis, key metrics, risk.
 - Do NOT include "Trade Plan" sections or allocation/sell instructions.
@@ -118,6 +138,8 @@ Include watchlist_adds in mm-meta for the strongest candidates across both secti
 EXPLORE_SECTIONS = """
 # Market Explorer: {topic}
 
+Quant-driven sector deep-dive: quantify players and trends with concrete numbers (market cap, revenue growth, margins, valuation), and frame catalysts and ideas with explicit risk/reward.
+
 ## Overview
 ## Biggest Players
 List 4–6 major companies. For each, use ### Company Name (TICKER) with bullet metrics (market cap, revenue growth, key edge). Do NOT use wide markdown tables.
@@ -132,8 +154,10 @@ Each with linked evidence.
 """
 
 
-def brief_system() -> str:
-    return f"""{CIO_PERSONA}
+def brief_system(date_display: str) -> str:
+    return f"""{BRIEF_PERSONA}
+
+{QUANT_FOUNDATION}
 
 {CLARITY_RULE}
 
@@ -141,7 +165,7 @@ def brief_system() -> str:
 
 {PRODUCTION_RULE}
 
-{BRIEF_SECTIONS}
+{BRIEF_SECTIONS.format(date_display=date_display)}
 
 Do NOT include portfolio holdings tables or per-holding stop/limit analysis — that belongs on the Portfolio tab.
 Do NOT append mm-meta JSON blocks. Output markdown only."""
@@ -173,7 +197,9 @@ BRIEF_SECTION_SPECS: list[tuple[str, str, str]] = [
      "Macro/geopolitical catalyst chains: event -> asset move -> beneficiaries -> whether window is still open."),
 ]
 
-_FANOUT_BASE = f"""{CIO_PERSONA}
+_FANOUT_BASE = f"""{BRIEF_PERSONA}
+
+{QUANT_FOUNDATION}
 
 {CLARITY_RULE}
 
@@ -227,6 +253,37 @@ If watchlist tickers appear in today's news, note them briefly with links. Sugge
 If `prior_brief` context is provided, avoid repeating yesterday's identical trade ideas — evolve or replace them. Begin with the `## Market Trade Ideas` heading."""
 
 
+# --- Late-day update (mini-brief) --------------------------------------------
+# A short "what moved since the morning" note. The defining requirement is that
+# headlines are EMBEDDED into the prose as natural markdown links — the anchor
+# text is a grammatical phrase woven into the sentence, never a raw URL and not
+# necessarily the verbatim headline.
+
+LATE_DAY_UPDATE_INSTRUCTION = """Write a SHORT late-day market update: what actually moved since the morning brief. 1–2 tight paragraphs (roughly 90–160 words) — no headers, no bullets, no title.
+
+Quant-flavored: name the moves with numbers (index/sector %, a level, a notable single-name swing) rather than vague direction. Keep it to the few things that genuinely mattered today.
+
+CRITICAL — how to cite: EMBED each source headline into your sentence as a NATURAL markdown link. The anchor text must be a grammatical phrase that reads fluently inside the sentence — NOT a raw URL, and NOT necessarily the verbatim headline. Weave it in so a reader would not notice it was a link until they see it underlined.
+
+Good: "Semis led the tape as [chip names rallied on Macquarie's upgrade of the memory cycle](https://…), while [oil slipped on fresh OPEC+ supply signals](https://…)."
+Bad (raw URL): "Chips rallied (https://…)."
+Bad (dumped verbatim headline as a standalone link): "[Macquarie Upgrades Memory Stocks, Cites Cycle Turn](https://…)."
+
+Use ONLY the real articles provided — never invent a URL or headline. Cite 2–4 of them, each embedded as above. If little new happened, say so briefly rather than padding."""
+
+
+def late_day_update_system() -> str:
+    return f"""{LATE_DAY_PERSONA}
+
+{QUANT_FOUNDATION}
+
+{CLARITY_RULE}
+
+{PRODUCTION_RULE}
+
+{LATE_DAY_UPDATE_INSTRUCTION}"""
+
+
 def portfolio_system() -> str:
     return f"""{QUANT_PERSONA}
 
@@ -240,7 +297,9 @@ def portfolio_system() -> str:
 
 
 def picks_system() -> str:
-    return f"""{CIO_PERSONA}
+    return f"""{PICKS_PERSONA}
+
+{QUANT_FOUNDATION}
 
 {CLARITY_RULE}
 
@@ -248,13 +307,17 @@ def picks_system() -> str:
 
 {PRODUCTION_RULE}
 
+{PICKS_HELD_REFERENCE_RULE}
+
 {PICKS_SECTIONS}
 
 {META_BLOCK_INSTRUCTION}"""
 
 
 def explore_system(topic: str) -> str:
-    return f"""{CIO_PERSONA}
+    return f"""{EXPLORE_PERSONA}
+
+{QUANT_FOUNDATION}
 
 {CLARITY_RULE}
 
@@ -286,7 +349,9 @@ EXPLORE_SECTION_SPECS: list[tuple[str, str, str]] = [
      "Reference the user's holdings and watchlist explicitly. Where does this topic overlap, hedge, or diverge from what they already own?"),
 ]
 
-_EXPLORE_RULES = f"""{CIO_PERSONA}
+_EXPLORE_RULES = f"""{EXPLORE_PERSONA}
+
+{QUANT_FOUNDATION}
 
 {CLARITY_RULE}
 
@@ -350,7 +415,7 @@ PICKS_RANK_INSTRUCTION = """You are selecting and RANKING today's top stock pick
 
 Rules:
 - Choose EXACTLY 5 large-cap names (market cap generally > $10B) and EXACTLY 5 small-cap/growth names ($300M–$15B, recent IPOs, venture-backed, emerging leaders).
-- Recommend ONLY tickers the user does NOT already hold.
+- Recommend ONLY tickers the user does NOT already hold. `held_tickers` lists every owned name (and its share-class siblings) — never emit any of them, not even to substitute or comment on them. The candidate lists are already held-filtered; pick only from them.
 - Pick ONLY from the provided candidate tickers — never invent a symbol.
 - rank 1 = highest conviction; the ordering must be globally coherent and defensible head-to-head across the whole list.
 - Each `angle` is a specific, non-obvious catalyst or variant-vs-consensus view (never a generic bull case); each `evidence` cites one real linked article from the provided context.
@@ -358,11 +423,15 @@ Rules:
 
 
 def picks_rank_system() -> str:
-    return f"""{CIO_PERSONA}
+    return f"""{PICKS_PERSONA}
+
+{QUANT_FOUNDATION}
 
 {CLARITY_RULE}
 
 {PRODUCTION_RULE}
+
+{PICKS_HELD_REFERENCE_RULE}
 
 {PICKS_RANK_INSTRUCTION}"""
 
@@ -374,11 +443,13 @@ Requirements:
 - Structure: a tight thesis paragraph that builds on the provided `angle`, then key metrics, then a one-line risk.
 - Cite at least one linked news article [Headline](url) from the provided context.
 - Wrap uncommon metrics as `<term id="FCF">FCF</term>`.
-- Do NOT include a "Trade Plan", allocation, or sell instructions. Do NOT append an mm-meta block. Do NOT reference how the pick was selected or any missing data."""
+- Do NOT include a "Trade Plan", allocation, or sell instructions. Do NOT append an mm-meta block. Do NOT reference how the pick was selected, whether any name is held, or any missing data. Never write "already held", "Substitute:", "skip", or any self-correction — just write the thesis for this pick."""
 
 
 def picks_detail_system() -> str:
-    return f"""{CIO_PERSONA}
+    return f"""{PICKS_PERSONA}
+
+{QUANT_FOUNDATION}
 
 {CLARITY_RULE}
 
@@ -386,4 +457,42 @@ def picks_detail_system() -> str:
 
 {PRODUCTION_RULE}
 
+{PICKS_HELD_REFERENCE_RULE}
+
 {PICKS_DETAIL_INSTRUCTION}"""
+
+
+# --- Review / repair pass -----------------------------------------------------
+# Deterministic scrubbing (review_gate) is the primary finalization mechanism.
+# This single, lightweight pass is used ONLY when the gate detects a structural
+# gap it cannot fix in place — a required section is missing. It writes ONLY the
+# missing section(s), so it stays cheap (one small fast-model call at most).
+
+def review_repair_system(gen_type: str, missing: list[str]) -> str:
+    wanted = "; ".join(missing)
+    kind = {
+        "brief": "morning market brief",
+        "explore": "market deep-dive",
+        "portfolio": "portfolio analytics report",
+    }.get(gen_type, "analysis")
+    # Repair in the same voice as the section being patched.
+    persona = {
+        "brief": BRIEF_PERSONA,
+        "explore": EXPLORE_PERSONA,
+        "portfolio": QUANT_PERSONA,
+    }.get(gen_type, EXPLORE_PERSONA)
+    return f"""{persona}
+
+{QUANT_FOUNDATION}
+
+{CLARITY_RULE}
+
+{EVIDENCE_RULE}
+
+{PRODUCTION_RULE}
+
+A {kind} was generated but is MISSING these required section(s): {wanted}.
+
+Write ONLY the missing section(s) as clean markdown, each under its exact `##`/`###` heading as named. Reuse the tickers and themes already present in the provided existing markdown; every material news/catalyst claim MUST cite a real markdown link [Headline](url) that already appears in the existing markdown — do NOT invent headlines or URLs. If you cannot support a claim with an existing link, keep it high-level and evidence-free rather than fabricating a source.
+
+Output ONLY the markdown for the missing section(s) — no preamble, no other sections, no mm-meta block, no commentary about what you are doing."""

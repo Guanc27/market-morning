@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Market Morning",
+  "description": "AI morning market brief, portfolio analysis, and stock insights",
+  "version": "0.1.16",
+  "permissions": ["storage", "sidePanel", "tabs"],
+  "host_permissions": ["http://127.0.0.1:8742/*"],
+  "action": {
+    "default_title": "Open Market Morning"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+M",
+        "mac": "Alt+Shift+M"
+      },
+      "description": "Open Market Morning"
+    },
+    "open-panel": {
+      "suggested_key": {
+        "default": "Alt+M",
+        "mac": "Command+Shift+M"
+      },
+      "description": "Open side panel"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

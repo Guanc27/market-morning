@@ -8,4 +8,8 @@ backend/data/
 node_modules/
 .DS_Store
 dist/
+# The shipped extension frontend lives in extension/dist/ (no build step —
+# build-mac-app.sh copies it verbatim), so it must stay under source control.
+!extension/dist/
+!extension/dist/**
 *.log

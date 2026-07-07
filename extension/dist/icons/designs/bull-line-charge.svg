@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#1a3c34"/>
+  <!-- Single-stroke charging bull -->
+  <path d="M24 92 C36 76 44 72 52 68 C58 58 64 52 72 48 C80 42 88 36 96 32 C100 28 104 26 108 24"
+    stroke="#f6f4ef" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M52 68 C48 78 42 84 32 92 C40 88 46 84 52 78"
+    stroke="#f6f4ef" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M96 32 L108 22 L102 32" stroke="#e8622a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <circle cx="88" cy="44" r="2.5" fill="#e8622a"/>
+</svg>

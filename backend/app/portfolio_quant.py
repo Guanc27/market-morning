@@ -212,13 +212,61 @@ def _regime(market: dict[str, Any] | None) -> dict[str, Any]:
     return {"vix": vix, "label": label, "note": note}
 
 
+def _has_live_price(row: dict[str, Any]) -> bool:
+    """True only when the holding carries a real, positive live quote.
+
+    Missing/zero/unavailable quotes must be excluded from value/return/weight
+    math so a single failed quote can never fabricate a $0 position or a bogus
+    -100% loss that drags equity into a false wipeout.
+    """
+    price = row.get("price")
+    value = row.get("value")
+    return (
+        isinstance(price, (int, float)) and price > 0
+        and isinstance(value, (int, float)) and value > 0
+    )
+
+
+def reconcile_equity(
+    rows: list[dict[str, Any]],
+    account: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Single source of truth for portfolio equity reconciliation.
+
+    Only names with a real, positive live quote contribute to ``priced_value``.
+    When any quote is stale, prefer the broker snapshot's authoritative
+    ``equity_value`` so the total reconciles to reality (equity + cash == account)
+    instead of collapsing to the sum of only the resolved names. Returns
+    ``{total_value, priced_value, source, stale_tickers}``.
+    """
+    account = account or {}
+    valid = [r for r in (rows or []) if r.get("ticker")]
+    priced_value = round(sum(float(r["value"]) for r in valid if _has_live_price(r)), 2)
+    stale_tickers = [str(r["ticker"]).upper() for r in valid if not _has_live_price(r)]
+    snapshot_equity = account.get("equity_value")
+    if stale_tickers and isinstance(snapshot_equity, (int, float)) and snapshot_equity > 0:
+        total_value = round(float(snapshot_equity), 2)
+        source = "broker_snapshot"
+    else:
+        total_value = priced_value
+        source = "live_quotes"
+    return {
+        "total_value": total_value,
+        "priced_value": priced_value,
+        "source": source,
+        "stale_tickers": stale_tickers,
+    }
+
+
 def compute_portfolio_quant(
     portfolio_rows: list[dict[str, Any]],
     technicals: dict[str, dict[str, Any]] | None = None,
     market: dict[str, Any] | None = None,
+    account: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compute the full quant analytics block for a set of holdings."""
     technicals = technicals or {}
+    account = account or {}
     rows = [r for r in portfolio_rows if r.get("ticker")]
     if not rows:
         return {"available": False}
@@ -251,15 +299,23 @@ def compute_portfolio_quant(
         if r is not None:
             returns[t] = r
 
-    total_value = round(sum(float(r.get("value") or 0) for r in rows), 2)
+    # Only names with a real live quote contribute value; total_cost spans every
+    # holding (avg_cost is always known). Equity reconciliation (snapshot fallback
+    # when any quote is stale) is centralized in reconcile_equity().
+    rec = reconcile_equity(rows, account)
+    priced_value = rec["priced_value"]
     total_cost = round(sum(float(r.get("avg_cost") or 0) * float(r.get("shares") or 0) for r in rows), 2)
+    stale_tickers = rec["stale_tickers"]
+    total_value = rec["total_value"]
+    equity_source = rec["source"]
 
     per_ticker: dict[str, dict[str, Any]] = {}
     weighted_beta = 0.0
     for r in rows:
         t = r["ticker"].upper()
-        value = float(r.get("value") or 0)
-        weight = (value / total_value) if total_value else 0
+        priced = _has_live_price(r)
+        value = float(r["value"]) if priced else 0.0
+        weight = (value / total_value) if (total_value and priced) else 0
         template = templates[t]
         bench = SECTOR_BENCHMARKS.get(template, "SPY")
         ri = returns.get(t)
@@ -272,7 +328,7 @@ def compute_portfolio_quant(
         if beta_mkt is not None:
             weighted_beta += weight * beta_mkt
         atr = _atr(histories.get(t))
-        price = float(r.get("price") or 0)
+        price = float(r["price"]) if priced else 0.0
         tech = technicals.get(t) or technicals.get(r["ticker"]) or {}
         atr_pct = round(atr / price * 100, 1) if atr and price else None
         # Vol-scaled protective stop: 2.5x ATR below price (wider for genuine
@@ -281,8 +337,9 @@ def compute_portfolio_quant(
         ret_pct = r.get("return_pct")
         large_winner = isinstance(ret_pct, (int, float)) and ret_pct >= 100
         per_ticker[t] = {
-            "weight_pct": round(weight * 100, 1),
-            "value": round(value, 2),
+            "weight_pct": round(weight * 100, 1) if priced else None,
+            "value": round(value, 2) if priced else None,
+            "quote_unavailable": not priced,
             "sector_template": template,
             "benchmark": bench,
             "beta_market": beta_mkt,
@@ -299,16 +356,19 @@ def compute_portfolio_quant(
             "signal_guide": SECTOR_SIGNAL_GUIDES.get(template, SECTOR_SIGNAL_GUIDES["broad"]),
         }
 
-    # Sector-template weights (factor buckets, not GICS)
+    # Sector-template weights (factor buckets, not GICS). Only priced names
+    # carry value; unpriced names are omitted rather than counted as $0.
     sector_weights: dict[str, float] = {}
     for r in rows:
+        if not _has_live_price(r):
+            continue
         t = r["ticker"].upper()
-        sector_weights[templates[t]] = sector_weights.get(templates[t], 0.0) + float(r.get("value") or 0)
+        sector_weights[templates[t]] = sector_weights.get(templates[t], 0.0) + float(r["value"])
     sector_weights_pct = {
         k: round(v / total_value * 100, 1) for k, v in sorted(sector_weights.items(), key=lambda x: -x[1])
     } if total_value else {}
 
-    weights = [(float(r.get("value") or 0) / total_value) for r in rows] if total_value else []
+    weights = [(float(r["value"]) / total_value) for r in rows if _has_live_price(r)] if total_value else []
     hhi = round(sum(w * w for w in weights), 4) if weights else None
     eff_bets_name = round(1 / hhi, 1) if hhi else None
 
@@ -362,6 +422,9 @@ def compute_portfolio_quant(
             "total_cost": total_cost,
             "return_pct": round((total_value - total_cost) / total_cost * 100, 2) if total_cost else 0,
             "position_count": len(rows),
+            "priced_value": priced_value,
+            "equity_source": equity_source,
+            "quote_unavailable_tickers": stale_tickers,
             "hhi": hhi,
             "effective_bets_by_name": eff_bets_name,
             "effective_bets_by_factor": eff_bets_factor,
@@ -383,3 +446,58 @@ def compute_portfolio_quant(
     }
     _QUANT_CACHE[cache_key] = (now, result)
     return result
+
+
+# Sector-template buckets that together constitute "semiconductor / AI-chip"
+# exposure when narrated as one number (semis + memory; ai_infra is data-center
+# power, reported separately).
+_SEMI_FAMILY_TEMPLATES = ("semis", "memory")
+
+
+def portfolio_concentration(
+    portfolio_rows: list[dict[str, Any]],
+    account: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Lightweight, network-free sector concentration for the picks path.
+
+    Gives picks the SAME code-computed aggregate the portfolio/explore paths use
+    (single source of truth) so it never free-forms a wrong concentration figure.
+    Only priced names contribute value; the total prefers the broker snapshot
+    when any quote is stale, matching ``compute_portfolio_quant``.
+    """
+    account = account or {}
+    rows = [r for r in (portfolio_rows or []) if r.get("ticker")]
+    if not rows:
+        return {"available": False}
+
+    rec = reconcile_equity(rows, account)
+    total_value = rec["total_value"]
+    if total_value <= 0:
+        return {"available": False}
+
+    by_value: dict[str, float] = {}
+    for r in rows:
+        if not _has_live_price(r):
+            continue
+        template = classify_ticker(r["ticker"], r.get("sector"), r.get("industry"))
+        by_value[template] = by_value.get(template, 0.0) + float(r["value"])
+
+    by_template = {
+        k: {"value": round(v, 2), "pct": round(v / total_value * 100, 1)}
+        for k, v in sorted(by_value.items(), key=lambda x: -x[1])
+    }
+    semi_value = round(sum(by_value.get(t, 0.0) for t in _SEMI_FAMILY_TEMPLATES), 2)
+    return {
+        "available": True,
+        "total_value": total_value,
+        "by_sector_template": by_template,
+        "semiconductor_cluster": {
+            "templates": list(_SEMI_FAMILY_TEMPLATES),
+            "value": semi_value,
+            "pct": round(semi_value / total_value * 100, 1),
+        },
+        "note": (
+            "These are the ONLY sanctioned portfolio-concentration figures. Do not "
+            "compute, estimate, or state any other portfolio weight or dollar total."
+        ),
+    }

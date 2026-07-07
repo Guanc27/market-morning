@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#0a0a0a"/>
+  <!-- Crescent horns  abstract bullish symbol -->
+  <path d="M64 88 C48 88 36 76 36 60 C36 44 48 32 64 32 C80 32 92 44 92 60 C92 76 80 88 64 88 Z" stroke="#2d5a4f" stroke-width="3" fill="none"/>
+  <path d="M36 60 C28 48 24 36 20 24" stroke="#e8622a" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M92 60 C100 48 104 36 108 24" stroke="#e8622a" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="64" cy="58" r="8" fill="#f6f4ef"/>
+  <path d="M64 32 L64 20 M64 20 L58 26 M64 20 L70 26" stroke="#e8622a" stroke-width="2.5" stroke-linecap="round"/>
+</svg>
